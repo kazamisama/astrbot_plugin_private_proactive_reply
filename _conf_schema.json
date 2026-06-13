@@ -41,10 +41,7 @@
   "llm_schedule_min_delay_minutes": {
     "description": "⏱️ LLM 自主排期最短延迟（分钟）",
     "type": "float",
-    "default": 10,
-    "condition": {
-      "llm_schedule_enabled": true
-    },
+    "default": 5,
     "hint": "模型请求的 delay_minutes 低于该值时会被自动抬高。"
   },
   "llm_schedule_max_delay_minutes": {
@@ -82,7 +79,7 @@
   "scan_interval_seconds": {
     "description": "🔍 扫描间隔（秒）",
     "type": "int",
-    "default": 60,
+    "default": 30,
     "hint": "后台检查各私聊是否满足主动回复条件的间隔。",
     "slider": {
       "min": 5,
@@ -93,19 +90,19 @@
   "idle_after_minutes": {
     "description": "⏳ 用户沉默多久后尝试主动回复（分钟）",
     "type": "float",
-    "default": 120,
+    "default": 30,
     "hint": "距离用户上次私聊消息超过该时长后，才会尝试生成主动消息。"
   },
   "min_interval_minutes": {
     "description": "🧊 两次机器人消息最小间隔（分钟）",
     "type": "float",
-    "default": 360,
+    "default": 60,
     "hint": "防止频繁打扰。普通机器人消息和本插件主动消息都会被计入。"
   },
   "max_unanswered_times": {
     "description": "🙊 连续未回复上限",
     "type": "int",
-    "default": 3,
+    "default": 5,
     "hint": "主动消息连续发出但用户未回复达到上限后暂停，直到用户再次回复。填 0 表示不限制。",
     "slider": {
       "min": 0,
@@ -150,8 +147,7 @@
   "max_triggers_per_scan": {
     "description": "🚦 单轮扫描最多触发会话数",
     "type": "int",
-    "default": 1,
-    "hint": "防止插件启动后大量会话同时触发。",
+    "default": 2,
     "slider": {
       "min": 1,
       "max": 20,
