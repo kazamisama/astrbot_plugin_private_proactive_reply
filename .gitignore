@@ -1,3 +1,6 @@
+# 代码索引
+.codegraph/
+
 # Python
 __pycache__/
 *.py[cod]
