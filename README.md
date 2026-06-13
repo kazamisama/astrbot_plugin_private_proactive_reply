@@ -1,5 +1,7 @@
 # 私聊智能主动回复
 
+> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.2.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
+
 一个轻量版私聊主动回复插件。参考 `astrbot_plugin_proactive_chat` 的核心思路，但第一版刻意不引入 WebUI、遥测、TTS、复杂多会话覆盖配置，只保留私聊主动回复所需的稳定闭环。
 
 ## 功能
