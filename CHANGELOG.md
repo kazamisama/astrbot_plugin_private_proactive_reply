@@ -2,6 +2,17 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.2.1] - 2026-06-13
+
+### Changed
+- 放宽主动回复的默认配置，降低触发门槛：
+  - `idle_after_minutes`：120 → **30**（用户沉默 30 分钟即可触发）
+  - `min_interval_minutes`：360 → **60**（两次机器人消息最小间隔 1 小时）
+  - `max_unanswered_times`：3 → **5**（连续未回复上限放宽到 5 次）
+  - `scan_interval_seconds`：60 → **30**（后台扫描频率提升到每 30 秒一次）
+  - `max_triggers_per_scan`：1 → **2**（单轮扫描最多触发 2 个会话）
+  - `llm_schedule_min_delay_minutes`：10 → **5**（LLM 自主排期最短延迟 5 分钟）
+
 ## [v0.2.0] - 2026-06-13
 
 ### Added
