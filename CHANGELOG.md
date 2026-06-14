@@ -2,6 +2,32 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.0] - 2026-06-14
+
+### Changed
+- **适配 `astrbot_plugin_emotion_state_machine` v0.3.0 的 HTML 哨兵包裹**：
+  esm 自 v0.3.0 起给 `build_prompt_block` 的输出包了
+  `<!-- esm:emotion-block:start -->` / `<!-- esm:emotion-block:end -->`
+  HTML 注释哨兵（用于自身 `_inject_emotion_block` 的去重/替换）。本插件
+  在 `_build_emotion_block` 末尾用正则剥离哨兵后再拼到 system prompt，
+  LLM 不会看到标记，只有纯情绪状态描述。
+  - 哨兵格式常量（`ESM_SENTINEL_START` / `ESM_SENTINEL_END`）定义在
+    模块级，re.escape 后做非贪婪 + DOTALL 匹配，容忍空行/前后空白变体。
+  - 哨兵格式若未来变更，正则失配会自然降级为「原样透传」—— LLM 忽略
+    HTML 注释，不会爆。
+
+### Added
+- 4 个新单元测试覆盖哨兵剥除：
+  - 标准 `start\n{inner}\nend` 形态 → 剥除。
+  - 带额外空行/缩进的变体 → 剥除。
+  - 上游未来去掉哨兵时透传。
+  - 端到端：append 后最终 system_prompt 不含哨兵。
+
+### Backward compatibility
+- 完全向后兼容：未安装 esm、或 esm 版本 < v0.3.0（未引入哨兵）的用户
+  行为与 v0.5.0 一致。
+- 不需要 esm 配合做任何改动。
+
 ## [v0.5.0] - 2026-06-14
 
 ### Added

@@ -35,6 +35,20 @@ PLUGIN_NAME = "astrbot_plugin_private_proactive_reply"
 # current emotional state. Lookups are lazy and defensive — the plugin must
 # still work when the emotion plugin is absent or uninitialized.
 EMOTION_STAR_NAME = "astrbot_plugin_emotion_state_machine"
+# v0.6.0: astrbot_plugin_emotion_state_machine v0.3.0 wraps
+# `build_prompt_block` output in HTML-comment sentinels (see
+# `ESM_BLOCK_START` / `ESM_BLOCK_END` in emotion_engine). We strip the
+# sentinels before splicing the block onto the system prompt so the
+# LLM only sees the inner state description, not the markup markers.
+# If the upstream sentinel format ever changes, the regex below
+# becomes a no-op and we fall back to passing the raw block through
+# — the LLM ignores HTML comments anyway, but the noise is gone.
+ESM_SENTINEL_START = "<!-- esm:emotion-block:start -->"
+ESM_SENTINEL_END = "<!-- esm:emotion-block:end -->"
+_ESM_SENTINEL_RE = re.compile(
+    re.escape(ESM_SENTINEL_START) + r"\s*\n?(.*?)\n?\s*" + re.escape(ESM_SENTINEL_END),
+    re.DOTALL,
+)
 STATE_SCHEMA_VERSION = 2
 
 
@@ -200,7 +214,14 @@ class PrivateProactiveReplyPlugin(star.Star):
                 f"[私聊主动回复] emotion block 不是字符串 (got {type(block).__name__})，已忽略。"
             )
             return ""
-        return block.strip()
+        # v0.6.0: strip emotion_state_machine's HTML sentinel markers
+        # (added in esm v0.3.0) so they don't leak into the system prompt.
+        # The regex is non-greedy and DOTALL — handles the typical
+        # `<!-- start -->\n{inner}\n<!-- end -->` shape and any whitespace
+        # variant. If the format ever drifts, the regex misses and
+        # `block` passes through unchanged (LLM ignores HTML comments).
+        stripped = _ESM_SENTINEL_RE.sub(r"\1", block).strip()
+        return stripped
 
     # ------------------------------------------------------------------
     # Persistence

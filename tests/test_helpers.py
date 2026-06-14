@@ -380,6 +380,76 @@ def test_build_emotion_block_happy_path():
     assert star.last_user_id == "u1"
 
 
+# ---------------------------------------------------------------------------
+# v0.6.0: strip emotion_state_machine's HTML sentinel markers (esm v0.3.0+)
+# ---------------------------------------------------------------------------
+
+
+def test_build_emotion_block_strips_sentinels():
+    """esm v0.3.0 wraps the block in `<!-- esm:emotion-block:start/end -->`.
+
+    We must strip the markers before splicing into the system prompt.
+    """
+    plugin = make_plugin_stub({})
+    raw = (
+        "<!-- esm:emotion-block:start -->\n"
+        "<emotion>calm</emotion>\n"
+        "<!-- esm:emotion-block:end -->"
+    )
+    star = _FakeEmotionStar(return_value=raw)
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    block = plugin._build_emotion_block("scope-A", "u1")
+    assert block == "<emotion>calm</emotion>"
+    # No trace of the markers in the returned text.
+    assert "esm:emotion-block" not in block
+    assert "<!--" not in block and "-->" not in block
+
+
+def test_build_emotion_block_strips_sentinels_extra_whitespace():
+    """Sentinels should still be stripped even if the upstream block
+    uses unusual whitespace (extra blank lines, leading/trailing space).
+    """
+    plugin = make_plugin_stub({})
+    raw = (
+        "  <!-- esm:emotion-block:start -->\n\n"
+        "  <emotion>warm</emotion>\n\n"
+        "  <!-- esm:emotion-block:end -->\n"
+    )
+    star = _FakeEmotionStar(return_value=raw)
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    block = plugin._build_emotion_block("scope", "u1")
+    assert block == "<emotion>warm</emotion>"
+
+
+def test_build_emotion_block_passes_through_when_no_sentinels():
+    """If the upstream ever drops the markers (or returns plain text),
+    we pass the block through unchanged. Defensive against format drift.
+    """
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>naked</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    block = plugin._build_emotion_block("scope", "u1")
+    assert block == "<emotion>naked</emotion>"
+
+
+def test_append_emotion_block_contains_no_sentinels():
+    """End-to-end: even when esm returns a sentinel-wrapped block, the
+    final system_prompt must not contain the HTML markers.
+    """
+    plugin = make_plugin_stub({})
+    raw = (
+        "<!-- esm:emotion-block:start -->\n"
+        "<emotion>calm</emotion>\n"
+        "<!-- esm:emotion-block:end -->"
+    )
+    star = _FakeEmotionStar(return_value=raw)
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    result = plugin._append_emotion_block("you are helpful", "scope", None)
+    assert "esm:emotion-block" not in result
+    assert "<!--" not in result and "-->" not in result
+    assert result == "you are helpful\n\n<emotion>calm</emotion>"
+
+
 def test_append_emotion_block_disabled_short_circuits():
     plugin = make_plugin_stub({"emotion_inject_enabled": False})
     plugin.context = SimpleNamespace(get_registered_star=lambda _name: None)
