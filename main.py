@@ -51,6 +51,16 @@ _ESM_SENTINEL_RE = re.compile(
     re.DOTALL,
 )
 STATE_SCHEMA_VERSION = 2
+# v0.6.4: minimal non-empty fallback system prompt. When no persona is
+# configured at all (conversation has no persona_id and
+# get_default_persona_v3 returns nothing usable), an empty system_prompt
+# would either skip the reply or, on chat-completions compatibility
+# upstreams (DeepSeek/Kimi/etc.), trigger a 400 BadRequestError. We splice
+# this baseline so the request always carries a valid, non-empty system
+# message. A configured persona always takes precedence over it.
+FALLBACK_SYSTEM_PROMPT = (
+    "你是一个温和、自然的私聊伙伴。请用简洁口语化的中文，像熟悉的朋友一样主动开口，避免机械问候和过度煊情。"
+)
 
 
 class PrivateProactiveReplyPlugin(star.Star):
@@ -622,10 +632,44 @@ class PrivateProactiveReplyPlugin(star.Star):
                 self._mark_dirty()
             logger.info(f"[私聊主动回复] 已向 {session_id} 发送主动消息。")
         except Exception as exc:
-            logger.error(f"[私聊主动回复] 主动回复流程失败 {session_id}: {exc}", exc_info=True)
+            # Surface upstream HTTP error bodies (e.g. a 400 from a
+            # chat-completions compatibility provider) so the root cause is
+            # not swallowed behind a bare exception name in state.json.
+            detail = self._describe_exception(exc)
+            logger.error(
+                f"[私聊主动回复] 主动回复流程失败 {session_id}: {exc}{detail}",
+                exc_info=True,
+            )
             await self._mark_skip(session_id, f"error:{type(exc).__name__}")
         finally:
             self._running_sessions.discard(session_id)
+
+    def _describe_exception(self, exc: Exception) -> str:
+        """Best-effort extraction of an HTTP error body from a provider
+        exception, returned as a short " | detail: ..." suffix.
+
+        OpenAI-compatible SDKs (openai, httpx-based clients) attach the
+        upstream JSON/body on attributes like ``response`` / ``body`` /
+        ``message``. A bare ``BadRequestError`` name in state.json hides
+        which field the upstream rejected; this surfaces it in the log.
+        Never raises -- diagnostics must not mask the original error.
+        """
+        parts: list[str] = []
+        try:
+            body = getattr(exc, "body", None)
+            if body:
+                parts.append(f"body={self._compact_text(str(body), 500)}")
+            response = getattr(exc, "response", None)
+            if response is not None:
+                status = getattr(response, "status_code", None)
+                if status is not None:
+                    parts.append(f"status={status}")
+                text = getattr(response, "text", None)
+                if text and not body:
+                    parts.append(f"text={self._compact_text(str(text), 500)}")
+        except Exception:
+            return ""
+        return (" | " + "; ".join(parts)) if parts else ""
 
     def _drop_schedule_fields(self, state: dict[str, Any]) -> None:
         state.pop("next_trigger_time", None)
@@ -857,7 +901,13 @@ class PrivateProactiveReplyPlugin(star.Star):
 
         # No persona at all — still allow emotion block to stand alone so
         # emotional context can survive a missing persona configuration.
-        return self._append_emotion_block("", session_id, conversation)
+
+        # No persona at all: fall back to a minimal baseline persona so the
+        # request always carries a non-empty system prompt. The emotion
+        # block (if any) is still appended on top of the baseline.
+        return self._append_emotion_block(
+            FALLBACK_SYSTEM_PROMPT, session_id, conversation
+        )
 
     def _append_emotion_block(
         self, base_prompt: str, session_id: str, conversation: Any

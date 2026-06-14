@@ -2,6 +2,28 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.4] - 2026-06-14
+
+### Fixed
+
+- **修复全新无人格会话上主动回复报 `BadRequestError`**：
+  当会话首次被主动触发、且未配置任何人格时，
+  `_get_system_prompt` 原本会返回空字符串。空 `system_prompt` 在
+  DeepSeek/Kimi 等 chat-completions 兼容上游会被判为非法请求
+  返回 HTTP 400。现新增 `FALLBACK_SYSTEM_PROMPT` 作为保底人设，
+  确保请求始终携带非空 system；已配置的人格仍优先。
+
+### Changed
+
+- **加固主动回复异常日志**：新增 `_describe_exception`，在主动
+  回复流程出错时把上游 HTTP 错误的 `body` / `status` / `text`
+  打进日志，不再被吞成裸异常名（便于下次 4xx 直接定位）。
+
+### Tests
+
+- 新增 4 个回归测试：空人格兑底返回非空、`FALLBACK_SYSTEM_PROMPT`
+  非空常量、`_describe_exception` 提取 body/status 与空值处理（共 78 个测试）。
+
 ## [v0.6.3] - 2026-06-14
 
 ### Added

@@ -784,3 +784,80 @@ def test_readme_3h_preset_lands_at_180_min_mean():
         "scan_interval default change? Update README too."
     )
 
+
+# ----------------------------------------------------------------------
+# Empty-persona fallback regression (v0.6.4)
+# ----------------------------------------------------------------------
+#
+# Root cause of an observed `error:BadRequestError` on a brand-new private
+# session: when no persona is configured at all, `_get_system_prompt` used
+# to return an empty string (via `_append_emotion_block("", ...)`). An
+# empty system prompt is rejected with HTTP 400 by some chat-completions
+# compatibility upstreams. v0.6.4 returns FALLBACK_SYSTEM_PROMPT instead,
+# so the request always carries a non-empty system message.
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+class _NoPersonaManager:
+    async def get_persona(self, persona_id):
+        return None
+
+    async def get_default_persona_v3(self, umo=""):
+        return None
+
+
+class _Ctx:
+    def __init__(self):
+        self.persona_manager = _NoPersonaManager()
+
+    def get_registered_star(self, name):
+        return None
+
+
+def _make_plugin_with_ctx(config):
+    module = load_module()
+    plugin = object.__new__(module.PrivateProactiveReplyPlugin)
+    plugin.config = config
+    plugin.context = _Ctx()
+    return plugin, module
+
+
+def test_get_system_prompt_falls_back_when_no_persona():
+    # No conversation, no default persona, emotion injection on but plugin
+    # absent -> must still return the non-empty fallback, never "".
+    plugin, module = _make_plugin_with_ctx({"emotion_inject_enabled": True})
+    result = _run(plugin._get_system_prompt("webchat:FriendMessage:x", None))
+    assert result == module.FALLBACK_SYSTEM_PROMPT
+    assert result.strip() != ""
+
+
+def test_fallback_system_prompt_is_non_empty_constant():
+    module = load_module()
+    assert isinstance(module.FALLBACK_SYSTEM_PROMPT, str)
+    assert module.FALLBACK_SYSTEM_PROMPT.strip() != ""
+
+
+def test_describe_exception_extracts_body_and_status():
+    plugin = make_plugin_stub({})
+
+    class _Resp:
+        status_code = 400
+        text = "should-not-be-used-when-body-present"
+
+    class _Err(Exception):
+        body = {"error": {"message": "system prompt required"}}
+        response = _Resp()
+
+    detail = plugin._describe_exception(_Err("bad"))
+    assert "status=400" in detail
+    assert "body=" in detail
+    assert detail.startswith(" | ")
+
+
+def test_describe_exception_empty_on_plain_exception():
+    plugin = make_plugin_stub({})
+    assert plugin._describe_exception(ValueError("nope")) == ""
