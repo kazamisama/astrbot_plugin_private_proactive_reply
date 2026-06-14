@@ -140,9 +140,36 @@ def test_format_template_replaces_placeholders():
 def test_format_template_does_not_recurse_into_user_value():
     plugin = make_plugin_stub({})
     # A user-supplied value containing a placeholder literal must NOT be
-    # re-expanded into another variable.
+    # re-expanded into another variable, regardless of dict iteration order.
     result = plugin._format_template(
         "摘录：{{last_user_message}} 原因：{{reason}}",
         {"last_user_message": "他说 {{reason}}", "reason": "REAL"},
     )
     assert result == "摘录：他说 {reason} 原因：REAL"
+
+    # Reverse insertion order: if the impl still depended on dict order,
+    # reason would already have been substituted and the user value would
+    # then be re-expanded.
+    result = plugin._format_template(
+        "摘录：{{last_user_message}} 原因：{{reason}}",
+        {"reason": "REAL", "last_user_message": "他说 {{reason}}"},
+    )
+    assert result == "摘录：他说 {reason} 原因：REAL"
+
+
+def test_format_template_ignores_unknown_placeholders():
+    plugin = make_plugin_stub({})
+    # Unknown keys must be replaced with empty string, not left as literal
+    # {{...}} in the output (which would either confuse the model or leak
+    # template syntax into the prompt).
+    result = plugin._format_template("a={{known}} b={{unknown}}", {"known": "X"})
+    assert result == "a=X b="
+
+
+def test_format_template_tolerates_whitespace_in_placeholder():
+    plugin = make_plugin_stub({})
+    result = plugin._format_template(
+        "时间 {{ current_time }} 原因{{reason}}",
+        {"current_time": "12:00", "reason": "问进度"},
+    )
+    assert result == "时间 12:00 原因问进度"

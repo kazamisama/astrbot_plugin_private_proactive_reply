@@ -698,11 +698,26 @@ class PrivateProactiveReplyPlugin(star.Star):
         return hour >= start or hour < end
 
     def _format_template(self, template: str, variables: dict[str, str]) -> str:
-        result = template
-        for key, value in variables.items():
-            safe_value = value.replace("{{", "{").replace("}}", "}")
-            result = result.replace("{{" + key + "}}", safe_value)
-        return result
+        # Scan placeholders in template-appearance order rather than dict
+        # insertion order. This guarantees a user-supplied value can never be
+        # re-expanded into another placeholder, regardless of how the caller
+        # built `variables`.
+        placeholders: list[tuple[int, int, str]] = []
+        for match in re.finditer(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}", template):
+            placeholders.append((match.start(), match.end(), match.group(1)))
+        if not placeholders:
+            return template
+        out: list[str] = []
+        cursor = 0
+        for start, end, key in placeholders:
+            out.append(template[cursor:start])
+            value = variables.get(key, "")
+            # Defang any remaining {{ / }} in the substituted value so it can
+            # never become a fresh placeholder in a later pass.
+            out.append(str(value).replace("{{", "{").replace("}}", "}"))
+            cursor = end
+        out.append(template[cursor:])
+        return "".join(out)
 
     def _sanitize_llm_text(self, text: str) -> str | None:
         if not text:
