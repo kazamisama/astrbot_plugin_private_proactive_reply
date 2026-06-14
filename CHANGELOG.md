@@ -2,6 +2,35 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.2] - 2026-06-14
+
+### Fixed
+
+- **`_cfg_int` 缺少 `max_value` 参数 (TypeError 修复)**：
+  v0.4.0 引入 `open_threads_max` 时，在 `_prepare_llm_request` 和
+  `_apply_thread_action` 写成了 `_cfg_int("open_threads_max", 3, 1, 5)`，
+  模仿 `_cfg_float` 的 `(key, default, min, max)` 形态，意图把
+  `open_threads_max` 限制在 `[1, 5]`。但 `_cfg_int` 当时只升级到了
+  `(key, default, min_value=None)`，没有 `max_value`。
+  - 结果：每次主动消息生成都抛 `TypeError: _cfg_int() takes from
+    3 to 4 positional arguments but 5 were given`，流程在
+    `_prepare_llm_request` 处中断，主动消息一条也发不出去。
+  - `_apply_thread_action` 处的同型调用未当场爆炸，是因为 LLM
+    尚未输出过 `THREAD:push`，调用路径未走到。
+  - v0.6.2 把 `_cfg_int` 升级到与 `_cfg_float` 对称的
+    `(key, default, min_value=None, max_value=None)`，两处
+    调用终于真正生效。
+
+### Added
+
+- 6 个单元测试覆盖：
+  - 4 位置参数回归（曾经的 TypeError 现场）。
+  - 超过 max → 上限裁剪。
+  - 低于 min → 下限裁剪。
+  - 3 位置参数旧形态继续工作（向后兼容）。
+  - 非数字字符串 → 回退到 default。
+  - 仅 `(key, default)` → 不裁剪。
+
 ## [v0.6.1] - 2026-06-14
 
 ### Fixed

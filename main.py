@@ -110,14 +110,24 @@ class PrivateProactiveReplyPlugin(star.Star):
             return value.strip().lower() in {"1", "true", "yes", "on", "启用", "开启"}
         return bool(value)
 
-    def _cfg_int(self, key: str, default: int, min_value: int | None = None) -> int:
+    def _cfg_int(
+        self,
+        key: str,
+        default: int,
+        min_value: int | None = None,
+        max_value: int | None = None,
+    ) -> int:
         try:
             value = int(self.config.get(key, default))
         except (TypeError, ValueError):
-            logger.warning(f"[私聊主动回复] 配置 {key} 不是有效整数，使用默认值 {default}。")
+            logger.warning(
+                f"[私聊主动回复] 配置 {key} 不是有效整数，使用默认值 {default}。"
+            )
             value = default
         if min_value is not None:
             value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
         return value
 
     def _cfg_float(

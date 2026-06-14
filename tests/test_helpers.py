@@ -676,3 +676,46 @@ def test_cfg_float_passes_through_normal_values():
     plugin = make_plugin_stub({"idle_probability_start": "not-a-number"})
     assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.3
 
+# ----------------------------------------------------------------------
+# _cfg_int -- four-positional-arg signature regression (v0.6.2)
+# ----------------------------------------------------------------------
+#
+# v0.4.0 introduced `open_threads_max` and called `_cfg_int(key, default,
+# min, max)` -- mirroring `_cfg_float` -- but only the float side of the
+# pair had its signature upgraded. The two call sites at
+# main.py:798 and main.py:1167 crashed with a TypeError on every
+# proactive generation. v0.6.2 promotes `_cfg_int` to the same
+# (key, default, min_value, max_value) shape as `_cfg_float`, so the
+# upper-bound clamp finally takes effect.
+
+def test_cfg_int_accepts_max_value_argument():
+    # Regression: previously the 4-positional-arg form raised
+    # "takes from 3 to 4 positional arguments but 5 were given".
+    plugin = make_plugin_stub({"open_threads_max": 3})
+    assert plugin._cfg_int("open_threads_max", 3, 1, 5) == 3
+
+def test_cfg_int_clamps_above_max():
+    plugin = make_plugin_stub({"open_threads_max": 99})
+    assert plugin._cfg_int("open_threads_max", 3, 1, 5) == 5
+
+def test_cfg_int_clamps_below_min():
+    plugin = make_plugin_stub({"open_threads_max": -1})
+    assert plugin._cfg_int("open_threads_max", 3, 1, 5) == 1
+
+def test_cfg_int_three_arg_form_still_works():
+    # Backward compat: callers that pass (key, default, min) only
+    # must keep behaving as before, with no upper bound.
+    plugin = make_plugin_stub({"scan_interval_seconds": 30})
+    assert plugin._cfg_int("scan_interval_seconds", 30, 5) == 30
+    plugin = make_plugin_stub({"scan_interval_seconds": 1})
+    assert plugin._cfg_int("scan_interval_seconds", 30, 5) == 5
+
+def test_cfg_int_invalid_string_falls_back_to_default():
+    plugin = make_plugin_stub({"open_threads_max": "not-a-number"})
+    assert plugin._cfg_int("open_threads_max", 3, 1, 5) == 3
+
+def test_cfg_int_no_bounds_passes_through():
+    plugin = make_plugin_stub({"open_threads_max": 99})
+    # (key, default) only -- no clamp.
+    assert plugin._cfg_int("open_threads_max", 3) == 99
+
