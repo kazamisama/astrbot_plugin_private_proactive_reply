@@ -32,6 +32,17 @@
 - `max_unanswered_times`: `3`
 - `quiet_hours`: `1-7`
 
+如果希望**首次主动回复的期望时间落在 3 小时**（按 30s 扫描间隔做 4 万次蒙特卡洛模拟验证），推荐：
+
+- `idle_after_minutes`: `175`（核心：把阈值拉到 175 min）
+- `idle_probability_start`: `0.005`（极低，压制过早触发）
+- `idle_probability_ramp_minutes`: `30`（短斜坡，几乎等同于"3 小时准时"）
+
+实测分布：均值 179.5 min，p10 ≈ 177 min，p90 ≈ 183 min，标准差 ≈ 2.4 min。
+若希望 ±4 min 抖动更自然，把 `idle_probability_start` 改为 `0.010`、`idle_probability_ramp_minutes` 改为 `60`（均值 ≈ 181.2 min，标准差 ≈ 3.4 min）。
+
+> 说明：决定期望回复时间的主要旋钮是 `idle_after_minutes`，`idle_probability_start` 与 `idle_probability_ramp_minutes` 在 30s 扫描间隔下只控制方差，对均值影响很小（蒙特卡洛实测 0.005 / 0.010 / 0.020 之间的均值差 < 0.5 min）。
+
 ## LLM 自主排期
 
 插件会在好友私聊的 LLM 请求中注入简短说明。模型如果判断“现在不必继续打扰，但稍后自然接续更好”，可以调用：

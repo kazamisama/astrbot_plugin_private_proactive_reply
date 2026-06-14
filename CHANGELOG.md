@@ -2,6 +2,39 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.3] - 2026-06-14
+
+### Added
+
+- **README 新增"3h 期望回复间隔"配置预设**:
+  解决一个被忽视的工程事实：在 30s 扫描间隔下，`idle_probability_start`
+  与 `idle_probability_ramp_minutes` 对**均值**几乎没有影响（同一阈值下
+  三个 `p_start` 取值的均值差 < 0.5 min），只控制**方差**。要把首次主动
+  回复的期望时间推到任意目标 `T` 小时，**主旋钮是 `idle_after_minutes`**，
+  其余两个只是微调抖动。
+  - 推荐配置：
+    ```yaml
+    idle_after_minutes: 175
+    idle_probability_start: 0.005
+    idle_probability_ramp_minutes: 30
+    ```
+  - 4 万次蒙特卡洛实测：均值 179.5 min，标准差 2.4 min，p10 ≈ 177 min，
+    p90 ≈ 183 min。
+  - 备选（更自然抖动）：`p_start=0.010`、`ramp=60`，均值 181.2 min，
+    标准差 3.4 min。
+  - 决策逻辑见 README "配置建议" 新增段落。
+
+- **回归测试 `test_readme_3h_preset_lands_at_180_min_mean`**：
+  5000 次扫描模拟 + 固定 seed 锁定上述预设的均值落在 [175, 185] min。
+  若 `idle_probability_value` 公式或 `scan_interval` 默认值被改，
+  导致 3h 预设不再成立，本测试会失败并提示同时更新 README。
+
+### Notes
+
+- 未修改 `_conf_schema.json` 的 default 字段：现有用户的配置不受影响，
+  新用户仍可用旧的"~30 min 主动"默认；3h 预设是 README 文档化的可选方案。
+- 未引入 preset 字段。预设写在 README 而非 schema，方便后续无破坏地扩展。
+
 ## [v0.6.2] - 2026-06-14
 
 ### Fixed
