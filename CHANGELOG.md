@@ -2,6 +2,14 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.2.3] - 2026-06-14
+
+### Fixed
+- **模板替换防二次注入**：原 `_format_template` 按 dict 插入顺序处理占位符，若用户消息（`last_user_message`）中包含 `{{other_key}}` 字面量，且 `other_key` 在 dict 中先于当前 key 被处理，用户值里的 `{{other_key}}` 会被替换为真实变量值，泄漏 prompt 模板结构。
+  - 改为按占位符在模板中的出现顺序扫描处理。
+  - 对替换值做 `{{` → `{` 脱敏，保证不会在后续 pass 变成新占位符。
+  - 顺手补行为：占位符现在允许 `{{ key }}`（含空白）语法；未知 key 替换为空串，不再泄漏 `{{...}}` 字面量到 prompt。
+
 ## [v0.2.2] - 2026-06-14
 
 ### Fixed
