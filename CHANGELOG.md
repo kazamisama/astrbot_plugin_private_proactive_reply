@@ -2,6 +2,27 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.4.0] - 2026-06-14
+
+### Changed
+- **default prompt 模板重构为多段式**：从单一「当前状态」段拆为「当前时间语境 / 对方近况 / 未完话题 / 排期线索 / 触发性质 / 风格档 / 安全风格 / 收尾指令」八段，LLM 能感知到时段、星期、是否周末、上次主动消息、未完话题列表等多维上下文。
+
+### Added
+- **THREAD: 控制行协议**：LLM 输出末尾可附 `THREAD: push|pop|none:<topic>` 一行；插件解析后维护 session 的 `open_threads` 列表（最多 `open_threads_max` 个），下次主动消息时 LLM 能看到这些未完话题，从而做到「承接上次未完话题」或「自然收尾」。
+- **风格档（style_phase）**：根据 trigger 性质 + 是否有未完话题 + 未回复次数，自动归类到 `normal` / `followup` / `gentle_stepback` / `scheduled` 四档，prompt 中给出对应引导语。
+- **时段感知**：新增 `_compute_time_context`，给出「清晨/午间/下午/晚上/深夜」+ 星期 + 是否周末，注入 prompt。
+- **state schema v1 → v2**：v1 state 加载时**只在内存里**补全 v2 新字段（`last_proactive_time` / `last_proactive_reason` / `last_proactive_text_preview` / `open_threads` / `thread_updated_at`），不立即落盘；下一次有 state 变更时随 flush 一起升级到 v2（零侵入迁移）。
+- 新增配置 `open_threads_max`（默认 3，slider 1~10）。
+- 7 个新内部 helper：`_compute_time_context` / `_style_phase` / `_style_phase_guidance` / `_reason_guidance` / `_format_open_threads_section` / `_parse_thread_action` / `_apply_thread_action`。
+- 18 个新单元测试覆盖时段映射（10 个 hour bucket）、星期判断、style_phase 转换矩阵、reason_guidance 已知 reason + 未知 reason、open_threads 渲染（空/有/超限）、THREAD: 解析（push/pop/none/大小写/无控制行/空输入/多行消息体）。
+
+### Backward compatibility
+- v1 state 文件无需手动迁移：插件启动时自动补全字段，首次有 state 变更时落盘升级。
+- 旧 `proactive_prompt` 自定义模板仍可用：缺失的新占位符由 v0.2.3 的修复（未知 key 替换为空串）兜底；用户仍可在 prompt 里只引用关心的子集占位符。
+
+### Schema
+- `STATE_SCHEMA_VERSION`: 1 → 2。
+
 ## [v0.3.0] - 2026-06-14
 
 ### Changed

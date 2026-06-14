@@ -29,7 +29,9 @@ def make_plugin_stub(config: dict):
 def test_constants():
     module = load_module()
     assert module.PLUGIN_NAME == "astrbot_plugin_private_proactive_reply"
-    assert module.STATE_SCHEMA_VERSION == 1
+    # v0.4.0: state schema bumped to v2 to track open_threads and
+    # last_proactive_* fields. Migration is handled by _migrate_state.
+    assert module.STATE_SCHEMA_VERSION == 2
 
 
 def test_default_prompt_contains_placeholders():
@@ -39,9 +41,20 @@ def test_default_prompt_contains_placeholders():
     assert "{{idle_minutes}}" in prompt
     assert "{{unanswered_count}}" in prompt
     assert "{{last_user_message}}" in prompt
-    assert "{{reason}}" in prompt
+    # v0.4.0: the bare {{reason}} is replaced by {{reason_guidance}}, a
+    # human-readable explanation of the trigger context. {{reason}} is still
+    # passed via variables (for back-compat with custom prompts).
+    assert "{{reason_guidance}}" in prompt
     assert "{{mood_hint}}" in prompt
     assert "{{message_hint}}" in prompt
+    # v0.4.0 additions
+    assert "{{time_of_day}}" in prompt
+    assert "{{day_of_week}}" in prompt
+    assert "{{last_proactive_text_preview}}" in prompt
+    assert "{{open_threads_section}}" in prompt
+    assert "{{style_phase}}" in prompt
+    assert "{{style_phase_guidance}}" in prompt
+    assert "THREAD: <push|pop|none>" in prompt
 
 
 def test_blocks_group_temporary_private_message():
@@ -219,3 +232,172 @@ def test_idle_probability_roll_respects_extremes():
     assert plugin._idle_probability_roll(2000, 1800, 0.0, 1800) is False
     # prob_start=1 -> always fires.
     assert plugin._idle_probability_roll(2000, 1800, 1.0, 1800) is True
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0 helpers: time context, style phase, thread actions
+# ---------------------------------------------------------------------------
+
+
+def test_compute_time_context_covers_all_buckets():
+    plugin = make_plugin_stub({})
+    cases = [
+        (5, "清晨"),
+        (10, "清晨"),
+        (11, "午间"),
+        (13, "午间"),
+        (14, "下午"),
+        (17, "下午"),
+        (18, "晚上"),
+        (22, "晚上"),
+        (23, "深夜"),
+        (4, "深夜"),
+    ]
+    for hour, expected in cases:
+        dt = datetime(2026, 6, 15, hour, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        tod, _, _ = plugin._compute_time_context(dt)
+        assert tod == expected, f"hour={hour} got {tod} expected {expected}"
+
+
+def test_compute_time_context_weekday_and_weekend():
+    plugin = make_plugin_stub({})
+    # 2026-06-15 is a Monday
+    dt = datetime(2026, 6, 15, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    _, day, is_weekend = plugin._compute_time_context(dt)
+    assert day == "周一"
+    assert is_weekend is False
+    # 2026-06-20 is a Saturday
+    dt = datetime(2026, 6, 20, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    _, day, is_weekend = plugin._compute_time_context(dt)
+    assert day == "周六"
+    assert is_weekend is True
+
+
+def test_style_phase_scheduled_wins():
+    plugin = make_plugin_stub({})
+    # scheduled beats every other condition
+    assert plugin._style_phase(0, [], "llm_scheduled") == "scheduled"
+    assert plugin._style_phase(5, ["x"], "llm_scheduled") == "scheduled"
+
+
+def test_style_phase_followup():
+    plugin = make_plugin_stub({})
+    # has threads + unanswered <= 2 -> followup
+    assert plugin._style_phase(0, ["a"], "idle_scan") == "followup"
+    assert plugin._style_phase(2, ["a", "b"], "manual") == "followup"
+    # unanswered == 2 still followup when threads exist
+    assert plugin._style_phase(2, ["a"], "idle_scan") == "followup"
+
+
+def test_style_phase_gentle_stepback():
+    plugin = make_plugin_stub({})
+    # unanswered >= 3 -> gentle_stepback
+    assert plugin._style_phase(3, [], "idle_scan") == "gentle_stepback"
+    assert plugin._style_phase(5, ["a"], "idle_scan") == "gentle_stepback"
+
+
+def test_style_phase_normal_default():
+    plugin = make_plugin_stub({})
+    # no threads + unanswered < 3
+    assert plugin._style_phase(0, [], "idle_scan") == "normal"
+    assert plugin._style_phase(2, [], "idle_scan") == "normal"
+
+
+def test_style_phase_guidance_all_phases_nonempty():
+    plugin = make_plugin_stub({})
+    for phase in ["normal", "followup", "gentle_stepback", "scheduled"]:
+        text = plugin._style_phase_guidance(phase)
+        assert isinstance(text, str) and len(text) > 0, f"empty guidance for {phase}"
+
+
+def test_reason_guidance_known_reasons():
+    plugin = make_plugin_stub({})
+    assert "沉默" in plugin._reason_guidance("idle_scan")
+    assert "自己决定" in plugin._reason_guidance("llm_scheduled")
+    assert "手动" in plugin._reason_guidance("manual")
+
+
+def test_reason_guidance_unknown_returns_empty():
+    plugin = make_plugin_stub({})
+    assert plugin._reason_guidance("nonsense") == ""
+
+
+def test_format_open_threads_section_empty():
+    plugin = make_plugin_stub({})
+    assert plugin._format_open_threads_section([], 3) == "（暂无）"
+
+
+def test_format_open_threads_section_with_items():
+    plugin = make_plugin_stub({})
+    section = plugin._format_open_threads_section(["a", "b"], 3)
+    assert "- a" in section
+    assert "- b" in section
+
+
+def test_format_open_threads_section_respects_limit():
+    plugin = make_plugin_stub({})
+    section = plugin._format_open_threads_section(["a", "b", "c", "d"], 2)
+    # Only the most recent 2 should be shown
+    assert "- a" not in section
+    assert "- b" not in section
+    assert "- c" in section
+    assert "- d" in section
+
+
+def test_parse_thread_action_push():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("你好呀\nTHREAD: push:聊一下部署")
+    assert body == "你好呀"
+    assert action == "push"
+    assert payload == "聊一下部署"
+
+
+def test_parse_thread_action_pop():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("晚安\nTHREAD: pop:聊一下部署")
+    assert body == "晚安"
+    assert action == "pop"
+    assert payload == "聊一下部署"
+
+
+def test_parse_thread_action_none_default():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("只是普通消息")
+    assert body == "只是普通消息"
+    assert action == "none"
+    assert payload is None
+
+
+def test_parse_thread_action_none_with_colon():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("嗯\nTHREAD: none:")
+    assert body == "嗯"
+    assert action == "none"
+    assert payload is None
+
+
+def test_parse_thread_action_case_insensitive():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("x\nthread: PUSH:  Topic  ")
+    assert body == "x"
+    assert action == "push"
+    assert payload == "Topic"
+
+
+def test_parse_thread_action_empty_input():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("")
+    assert body == ""
+    assert action == "none"
+    assert payload is None
+
+
+def test_parse_thread_action_keeps_unrelated_lines():
+    plugin = make_plugin_stub({})
+    body, action, payload = plugin._parse_thread_action("第一行\n第二行\nTHREAD: push:t\n第四行")
+    assert action == "push"
+    assert payload == "t"
+    assert "第一行" in body
+    assert "第二行" in body
+    assert "第四行" in body
+    assert "THREAD" not in body
