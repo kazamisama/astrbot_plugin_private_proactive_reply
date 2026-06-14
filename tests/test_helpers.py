@@ -173,3 +173,49 @@ def test_format_template_tolerates_whitespace_in_placeholder():
         {"current_time": "12:00", "reason": "问进度"},
     )
     assert result == "时间 12:00 原因问进度"
+
+
+def test_idle_probability_value_below_threshold():
+    plugin = make_plugin_stub({})
+    # Below threshold: caller should not have called us, but stay defensive.
+    assert plugin._idle_probability_value(1500, 1800, 0.3, 1800) == 0.0
+
+
+def test_idle_probability_value_at_threshold():
+    plugin = make_plugin_stub({})
+    # At the threshold boundary the curve is still pinned to 0.0 (the
+    # probability-curve logic only kicks in strictly past the threshold).
+    assert plugin._idle_probability_value(1800, 1800, 0.3, 1800) == 0.0
+
+
+def test_idle_probability_value_at_midpoint():
+    plugin = make_plugin_stub({})
+    # Halfway through the ramp: 0.3 + 0.7 * 0.5 = 0.65 (modulo float epsilon).
+    value = plugin._idle_probability_value(2700, 1800, 0.3, 1800)
+    assert round(value, 6) == 0.65
+
+
+def test_idle_probability_value_at_ramp_end():
+    plugin = make_plugin_stub({})
+    assert plugin._idle_probability_value(3600, 1800, 0.3, 1800) == 1.0
+
+
+def test_idle_probability_value_past_ramp():
+    plugin = make_plugin_stub({})
+    # Far past the ramp: pinned at 1.0.
+    assert plugin._idle_probability_value(7200, 1800, 0.3, 1800) == 1.0
+
+
+def test_idle_probability_value_zero_ramp():
+    plugin = make_plugin_stub({})
+    # ramp=0 means the curve has no room to climb; probability stays at
+    # prob_start for the lifetime of the idle window.
+    assert plugin._idle_probability_value(2000, 1800, 0.3, 0) == 0.3
+
+
+def test_idle_probability_roll_respects_extremes():
+    plugin = make_plugin_stub({})
+    # prob_start=0 -> never fires (no matter how long the idle).
+    assert plugin._idle_probability_roll(2000, 1800, 0.0, 1800) is False
+    # prob_start=1 -> always fires.
+    assert plugin._idle_probability_roll(2000, 1800, 1.0, 1800) is True

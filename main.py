@@ -104,6 +104,7 @@ class PrivateProactiveReplyPlugin(star.Star):
         key: str,
         default: float,
         min_value: float | None = None,
+        max_value: float | None = None,
     ) -> float:
         try:
             value = float(self.config.get(key, default))
@@ -112,6 +113,8 @@ class PrivateProactiveReplyPlugin(star.Star):
             value = default
         if min_value is not None:
             value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
         return value
 
     def _cfg_list(self, key: str) -> list[str]:
@@ -292,15 +295,19 @@ class PrivateProactiveReplyPlugin(star.Star):
     # ------------------------------------------------------------------
 
     async def _scan_loop(self) -> None:
-        interval = self._cfg_int("scan_interval_seconds", 60, 5)
         try:
             while True:
+                base = self._cfg_int("scan_interval_seconds", 30, 5)
+                jitter = self._cfg_float("scan_jitter_ratio", 0.1, 0.0, 0.5)
+                if jitter > 0:
+                    interval = base * random.uniform(1.0 - jitter, 1.0 + jitter)
+                else:
+                    interval = float(base)
                 await asyncio.sleep(interval)
                 try:
                     await self._scan_once()
                 except Exception as exc:
                     logger.error(f"[私聊主动回复] 单轮扫描异常: {exc}", exc_info=True)
-                interval = self._cfg_int("scan_interval_seconds", 60, 5)
         except asyncio.CancelledError:
             raise
 
@@ -383,10 +390,62 @@ class PrivateProactiveReplyPlugin(star.Star):
             return None
 
         idle_seconds = self._cfg_float("idle_after_minutes", 120.0, 0.1) * 60
-        if now - last_user < idle_seconds:
+        idle_elapsed = now - last_user
+        if idle_elapsed < idle_seconds:
+            return None
+
+        prob_start = self._cfg_float("idle_probability_start", 0.3, 0.0, 1.0)
+        ramp_seconds = self._cfg_float("idle_probability_ramp_minutes", 30.0, 0.1, 240.0) * 60
+        if not self._idle_probability_roll(
+            idle_elapsed, idle_seconds, prob_start, ramp_seconds
+        ):
             return None
 
         return "idle_scan"
+
+    def _idle_probability_value(
+        self,
+        elapsed: float,
+        threshold: float,
+        prob_start: float,
+        ramp_seconds: float,
+    ) -> float:
+        """Compute the probability the idle trigger should fire right now.
+
+        At ``elapsed == threshold`` the caller has already filtered out the
+        below-threshold case, but we stay defensive and return 0.0. From
+        ``elapsed > threshold`` the probability climbs linearly from
+        ``prob_start`` to 1.0 over ``ramp_seconds``. Past the ramp end the
+        probability is pinned at 1.0.
+
+        Separated from ``_idle_probability_roll`` so the math can be unit
+        tested without mocking ``random``.
+        """
+        if elapsed <= threshold:
+            return 0.0
+        if ramp_seconds <= 0:
+            return prob_start
+        overshoot = elapsed - threshold
+        if overshoot >= ramp_seconds:
+            return 1.0
+        return prob_start + (1.0 - prob_start) * (overshoot / ramp_seconds)
+
+    def _idle_probability_roll(
+        self,
+        elapsed: float,
+        threshold: float,
+        prob_start: float,
+        ramp_seconds: float,
+    ) -> bool:
+        """Roll the dice: should the idle trigger fire this scan?
+
+        Replaces the old hard-threshold check so the bot does not always
+        arrive on the same minute every cycle.
+        """
+        prob = self._idle_probability_value(
+            elapsed, threshold, prob_start, ramp_seconds
+        )
+        return random.random() < prob
 
     async def _run_proactive_session(self, session_id: str, reason: str) -> None:
         if session_id in self._running_sessions:

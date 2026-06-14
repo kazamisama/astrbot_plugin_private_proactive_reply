@@ -2,6 +2,28 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.3.0] - 2026-06-14
+
+### Changed
+- **idle 触发改为概率曲线**：旧版「到 idle_after_minutes 阈值即触发」改为概率触发。空闲刚到阈值时只以 `idle_probability_start`（默认 0.3）的概率触发，随空闲时间在 `idle_probability_ramp_minutes`（默认 30 分钟）内线性爬升到 1.0；超过 ramp 后必触发。打散「30 分钟必来」的机械感。
+- **扫描间隔叠加抖动**：`_scan_loop` 在 `scan_interval_seconds` 基础上叠加 `±scan_jitter_ratio`（默认 0.1，即 ±10%）的随机抖动，避免多会话在同一边界触发。
+
+### Added
+- 新增配置 `scan_jitter_ratio`（默认 0.1，范围 0.0~0.5）。
+- 新增配置 `idle_probability_start`（默认 0.3，范围 0.0~1.0）。
+- 新增配置 `idle_probability_ramp_minutes`（默认 30.0，范围 1.0~240.0）。
+- 内部辅助方法：`_idle_probability_value`（纯函数，可独立单测）、`_idle_probability_roll`（掷骰子）。
+- 内部辅助：`_cfg_float` 新增可选 `max_value` 参数，给三个新配置提供上限。
+- 7 个新单元测试覆盖概率曲线各边界（threshold 上下、ramp 中点、ramp 末尾、ramp 之后、ramp=0、roll 极端值）。
+
+### Backward compatibility
+- 新配置都有默认值，向前兼容：旧配置实例无需任何变更即可享受新行为（保留默认值时）。
+- 旧 `state.json` 不需要迁移（本次未改 schema）。
+- 旧 `proactive_prompt` 自定义模板不受影响：新增占位符不会出现在旧模板中。
+
+### Infrastructure
+- 新增 `conftest.py`：在 pytest 独立运行时把 AstrBot 源码树注入 `sys.path`（v0.2.3 时代测试需要手动 `PYTHONPATH`，现可 `pytest` 直跑）。自动识别 `ASTRBOT_PATH` 环境变量 / AstrBot embedded layout / 默认 `C:/application/AstrBot/backend/app`。
+
 ## [v0.2.3] - 2026-06-14
 
 ### Fixed
