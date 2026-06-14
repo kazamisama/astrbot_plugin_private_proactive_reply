@@ -48,6 +48,8 @@ class PrivateProactiveReplyPlugin(star.Star):
             "sessions": {},
         }
         self._scan_task: asyncio.Task[None] | None = None
+        self._flush_task: asyncio.Task[None] | None = None
+        self._dirty = False
         self._running_sessions: set[str] = set()
         self._plugin_started_at = time.time()
 
@@ -58,16 +60,20 @@ class PrivateProactiveReplyPlugin(star.Star):
             self._scan_task = asyncio.create_task(
                 self._scan_loop(), name="private-proactive-reply-scan-loop"
             )
+            self._flush_task = asyncio.create_task(
+                self._flush_loop(), name="private-proactive-reply-flush-loop"
+            )
         logger.info("[私聊主动回复] 插件已初始化。")
 
     async def terminate(self) -> None:
-        """Stop background scanner and persist state."""
-        if self._scan_task and not self._scan_task.done():
-            self._scan_task.cancel()
-            try:
-                await self._scan_task
-            except asyncio.CancelledError:
-                pass
+        """Stop background tasks and persist state."""
+        for task in (self._scan_task, self._flush_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         await self._save_state()
         logger.info("[私聊主动回复] 插件已停止。")
 
@@ -148,9 +154,27 @@ class PrivateProactiveReplyPlugin(star.Star):
             logger.error(f"[私聊主动回复] 加载状态失败，使用空状态: {exc}")
             self._state = {"schema_version": STATE_SCHEMA_VERSION, "sessions": {}}
 
+    def _mark_dirty(self) -> None:
+        """Flag state as changed; background flush loop will persist it."""
+        self._dirty = True
+
+    async def _flush_loop(self) -> None:
+        """Debounced background writer: persist state when dirty."""
+        interval = self._cfg_int("state_flush_interval_seconds", 5, 1)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if self._dirty:
+                    self._dirty = False
+                    await self._save_state()
+                interval = self._cfg_int("state_flush_interval_seconds", 5, 1)
+        except asyncio.CancelledError:
+            raise
+
     async def _save_state(self) -> None:
         try:
-            payload = json.dumps(self._state, ensure_ascii=False, indent=2)
+            async with self._lock:
+                payload = json.dumps(self._state, ensure_ascii=False, indent=2)
             await asyncio.to_thread(self.state_file.write_text, payload, encoding="utf-8")
         except Exception as exc:
             logger.error(f"[私聊主动回复] 保存状态失败: {exc}")
@@ -205,7 +229,7 @@ class PrivateProactiveReplyPlugin(star.Star):
             state["last_skip_reason"] = "user_replied"
             if event.get_self_id():
                 state["self_id"] = str(event.get_self_id())
-            await self._save_state()
+            self._mark_dirty()
 
         logger.debug(f"[私聊主动回复] 已记录私聊活跃: {session_id}")
 
@@ -220,10 +244,16 @@ class PrivateProactiveReplyPlugin(star.Star):
             return
         if not self._cfg_bool("track_normal_bot_messages", True):
             return
+        if self._is_blocked_private_event(event):
+            return
+        if not self._is_session_allowed(session_id, allow_auto_register=False):
+            return
+        if session_id not in self._sessions():
+            return
         async with self._lock:
             state = self._get_session_state(session_id)
             state["last_bot_message_time"] = time.time()
-            await self._save_state()
+            self._mark_dirty()
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, request: Any) -> None:
@@ -284,12 +314,14 @@ class PrivateProactiveReplyPlugin(star.Star):
             for session_id in configured:
                 state = self._get_session_state(session_id)
                 if self._cfg_bool("trigger_without_user_message", False):
-                    state.setdefault("last_user_message_time", self._plugin_started_at)
+                    if not state.get("last_user_message_time"):
+                        state["last_user_message_time"] = self._plugin_started_at
+                        state["timer_only"] = True
 
             candidates = list(self._sessions().keys())
 
         random.shuffle(candidates)
-        max_per_scan = self._cfg_int("max_triggers_per_scan", 1, 1)
+        max_per_scan = self._cfg_int("max_triggers_per_scan", 2, 1)
         triggered = 0
         for session_id in candidates:
             if triggered >= max_per_scan:
@@ -330,8 +362,16 @@ class PrivateProactiveReplyPlugin(star.Star):
         max_unanswered = self._cfg_int("max_unanswered_times", 3, 0)
         unanswered = int(state.get("unanswered_count") or 0)
         if max_unanswered > 0 and unanswered >= max_unanswered:
-            await self._mark_skip(session_id, "max_unanswered")
-            return None
+            # Timer-only sessions never receive a user reply to reset the
+            # counter, so cap them on a cooldown instead of silencing forever.
+            if state.get("timer_only") and last_bot > 0 and now - last_bot >= min_interval:
+                async with self._lock:
+                    live = self._get_session_state(session_id)
+                    live["unanswered_count"] = 0
+                    self._mark_dirty()
+            else:
+                await self._mark_skip(session_id, "max_unanswered")
+                return None
 
         next_trigger_time = float(state.get("next_trigger_time") or 0)
         if next_trigger_time > 0:
@@ -367,7 +407,7 @@ class PrivateProactiveReplyPlugin(star.Star):
                 state["unanswered_count"] = int(state.get("unanswered_count") or 0) + 1
                 self._drop_schedule_fields(state)
                 state["last_skip_reason"] = "sent"
-                await self._save_state()
+                self._mark_dirty()
             logger.info(f"[私聊主动回复] 已向 {session_id} 发送主动消息。")
         except Exception as exc:
             logger.error(f"[私聊主动回复] 主动回复流程失败 {session_id}: {exc}", exc_info=True)
@@ -386,14 +426,14 @@ class PrivateProactiveReplyPlugin(star.Star):
         async with self._lock:
             state = self._get_session_state(session_id)
             self._drop_schedule_fields(state)
-            await self._save_state()
+            self._mark_dirty()
 
     async def _mark_skip(self, session_id: str, reason: str) -> None:
         async with self._lock:
             state = self._get_session_state(session_id)
             state["last_skip_reason"] = reason
             state["last_skip_time"] = time.time()
-            await self._save_state()
+            self._mark_dirty()
 
     @filter.llm_tool(name="schedule_private_proactive_reply")
     async def schedule_private_proactive_reply(
@@ -458,7 +498,7 @@ class PrivateProactiveReplyPlugin(star.Star):
             state["next_message_hint"] = self._compact_text(message_hint, 200)
             state["scheduled_by"] = "llm_tool"
             state["last_skip_reason"] = "llm_scheduled"
-            await self._save_state()
+            self._mark_dirty()
 
         return (
             "已安排下一次私聊主动回复："
@@ -751,14 +791,14 @@ class PrivateProactiveReplyPlugin(star.Star):
         if action in {"enable", "启用"}:
             async with self._lock:
                 self._get_session_state(target)["enabled"] = True
-                await self._save_state()
+                self._mark_dirty()
             yield event.plain_result(f"✅ 已启用：{target}")
             return
 
         if action in {"disable", "停用", "关闭"}:
             async with self._lock:
                 self._get_session_state(target)["enabled"] = False
-                await self._save_state()
+                self._mark_dirty()
             yield event.plain_result(f"✅ 已停用：{target}")
             return
 
@@ -775,8 +815,39 @@ class PrivateProactiveReplyPlugin(star.Star):
                 state = self._get_session_state(target)
                 state["unanswered_count"] = 0
                 state["last_skip_reason"] = "manual_reset"
-                await self._save_state()
+                self._mark_dirty()
             yield event.plain_result(f"✅ 已重置未回复计数：{target}")
+            return
+
+        if action in {"schedule", "排期"}:
+            async with self._lock:
+                state = dict(self._sessions().get(target, {}))
+            next_ts = float(state.get("next_trigger_time") or 0)
+            if next_ts <= 0:
+                yield event.plain_result(f"会话 {target} 当前没有 LLM 排期计划。")
+                return
+            yield event.plain_result(
+                "私聊主动回复排期：\n"
+                f"会话：{target}\n"
+                f"计划时间：{self._format_timestamp(next_ts)}\n"
+                f"安排来源：{state.get('scheduled_by', '-')}\n"
+                f"原因：{state.get('next_reason', '-')}\n"
+                f"语气提示：{state.get('next_mood_hint', '') or '-'}\n"
+                f"话题提示：{state.get('next_message_hint', '') or '-'}"
+            )
+            return
+
+        if action in {"cancel", "取消"}:
+            async with self._lock:
+                state = self._get_session_state(target)
+                had_schedule = float(state.get("next_trigger_time") or 0) > 0
+                self._drop_schedule_fields(state)
+                state["last_skip_reason"] = "manual_cancel"
+                self._mark_dirty()
+            if had_schedule:
+                yield event.plain_result(f"✅ 已取消排期：{target}")
+            else:
+                yield event.plain_result(f"会话 {target} 没有待取消的排期。")
             return
 
         yield event.plain_result(
@@ -785,7 +856,9 @@ class PrivateProactiveReplyPlugin(star.Star):
             "/private_proactive list\n"
             "/private_proactive enable|disable [UMO]\n"
             "/private_proactive trigger [UMO]\n"
-            "/private_proactive reset [UMO]"
+            "/private_proactive reset [UMO]\n"
+            "/private_proactive schedule [UMO]\n"
+            "/private_proactive cancel [UMO]"
         )
 
     async def _build_status_text(self, session_id: str) -> str:

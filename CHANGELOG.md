@@ -2,6 +2,20 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.2.2] - 2026-06-14
+
+### Fixed
+- **状态落盘性能/锁竞争**：消息热路径不再在持锁状态下同步写盘。改为脏标记（`_mark_dirty`）+ 后台 `_flush_loop` 防抖批量落盘，插件停止时强制落盘。新增配置 `state_flush_interval_seconds`（默认 5 秒）。
+- **`on_after_message_sent` 绕过白名单/临时会话拦截**：之前所有私聊机器人发言都会被 `_get_session_state` 自动建条目，污染状态并出现在 `list` 中。现在补上 `_is_blocked_private_event` + 白名单校验，且只刷新已登记会话。
+- **timer_only 会话永久静默**：`trigger_without_user_message` 场景下用户从不回消息，`unanswered_count` 累加到上限后会永久静默。现在为这类会话标记 `timer_only`，命中上限后按 `min_interval_minutes` 冷却自动复位。
+- `max_triggers_per_scan` 代码内默认值由 1 修正为 2，与 `_conf_schema.json` 保持一致。
+
+### Added
+- 管理员命令 `/private_proactive schedule [UMO]`：查看会话当前 LLM 排期。
+- 管理员命令 `/private_proactive cancel [UMO]`：取消会话尚未触发的排期。
+- 新增配置 `state_flush_interval_seconds`（状态落盘间隔）。
+- 补充纯函数测试：跨午夜免打扰、`_sanitize_llm_text`、`_split_text`、模板占位符替换与防递归注入（共 13 个测试）。
+
 ## [v0.2.1] - 2026-06-13
 
 ### Changed

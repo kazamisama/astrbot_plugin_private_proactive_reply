@@ -13,7 +13,7 @@
 - 没有模型排期时，可按 `idle_after_minutes` 固定沉默时间兜底触发。
 - 使用当前会话人格和最近 conversation 历史，保证语气延续。
 - 支持免打扰时段、最小间隔、连续未回复上限。
-- 状态持久化到插件数据目录 `state.json`。
+- 状态持久化到插件数据目录 `state.json`，采用脏标记 + 后台批量落盘（`state_flush_interval_seconds`），高频私聊不会每条消息都同步写盘，插件停止时强制落盘。
 - 提供管理员命令查看状态、手动触发、启停会话。
 
 ## 配置建议
@@ -63,7 +63,12 @@ schedule_private_proactive_reply(delay_minutes, reason, mood_hint, message_hint,
 /private_proactive disable [UMO]
 /private_proactive trigger [UMO]
 /private_proactive reset [UMO]
+/private_proactive schedule [UMO]
+/private_proactive cancel [UMO]
 ```
+
+- `schedule`：查看该会话当前 LLM 排期（计划时间、来源、原因、语气/话题提示）。
+- `cancel`：取消该会话尚未触发的排期。
 
 如果不传 UMO，默认使用当前会话的 `event.unified_msg_origin`。
 

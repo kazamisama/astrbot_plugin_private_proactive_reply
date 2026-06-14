@@ -87,6 +87,17 @@
       "step": 5
     }
   },
+  "state_flush_interval_seconds": {
+    "description": "💾 状态落盘间隔（秒）",
+    "type": "int",
+    "default": 5,
+    "hint": "会话状态变更后，最多延迟该秒数批量写盘，避免高频私聊每条消息都同步落盘。插件停止时会强制落盘。",
+    "slider": {
+      "min": 1,
+      "max": 120,
+      "step": 1
+    }
+  },
   "idle_after_minutes": {
     "description": "⏳ 用户沉默多久后尝试主动回复（分钟）",
     "type": "float",
