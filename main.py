@@ -29,6 +29,12 @@ from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain
 
 PLUGIN_NAME = "astrbot_plugin_private_proactive_reply"
+# v0.5.0: cross-plugin integration with astrbot_plugin_emotion_state_machine.
+# When that plugin is installed and enabled, we inject its prompt block into
+# the proactive reply's system prompt so the LLM can align its tone with the
+# current emotional state. Lookups are lazy and defensive — the plugin must
+# still work when the emotion plugin is absent or uninitialized.
+EMOTION_STAR_NAME = "astrbot_plugin_emotion_state_machine"
 STATE_SCHEMA_VERSION = 2
 
 
@@ -132,6 +138,69 @@ class PrivateProactiveReplyPlugin(star.Star):
         except Exception:
             logger.warning(f"[私聊主动回复] 无法加载时区 {tz_name}，已回退 Asia/Shanghai。")
             return ZoneInfo("Asia/Shanghai")
+
+    # ------------------------------------------------------------------
+    # Cross-plugin integration: emotion_state_machine
+    # ------------------------------------------------------------------
+    #
+    # v0.5.0: when `astrbot_plugin_emotion_state_machine` is installed and
+    # enabled, we ask it for the current `build_prompt_block(scope, user_id)`
+    # and append it to the proactive reply's system prompt. The lookup is
+    # lazy + defensive so this plugin keeps working without the emotion
+    # plugin (or while it is still initializing).
+
+    def _get_emotion_plugin(self):
+        """Resolve the emotion_state_machine star via the plugin registry.
+
+        Returns the star instance on success, or None if the plugin is not
+        installed / not yet registered / not callable. We catch broadly on
+        purpose: any registry hiccup must degrade to "no block" rather than
+        blow up the proactive reply path.
+        """
+        try:
+            get_star = getattr(self.context, "get_registered_star", None)
+            if get_star is None:
+                return None
+            star_instance = get_star(EMOTION_STAR_NAME)
+        except Exception as exc:
+            logger.debug(f"[私聊主动回复] emotion_state_machine 不可用: {exc}")
+            return None
+        if star_instance is None:
+            return None
+        # The star's public surface is documented in emotion_state_machine's
+        # own main.py under "Public API for other plugins". A defensive
+        # `hasattr` check here means we keep working if the emotion plugin
+        # gets refactored and renames a method.
+        if not hasattr(star_instance, "build_prompt_block"):
+            logger.debug(
+                "[私聊主动回复] emotion_state_machine 实例缺少 build_prompt_block，跳过注入。"
+            )
+            return None
+        return star_instance
+
+    def _build_emotion_block(self, session_id: str, user_id: str) -> str:
+        """Fetch the emotion prompt block for the given session.
+
+        Returns an empty string when the feature is disabled, the plugin
+        is missing, or the remote call raised. Never raises — failures here
+        must never abort proactive generation.
+        """
+        if not self._cfg_bool("emotion_inject_enabled", True):
+            return ""
+        emo = self._get_emotion_plugin()
+        if emo is None:
+            return ""
+        try:
+            block = emo.build_prompt_block(scope=session_id, user_id=user_id)
+        except Exception as exc:
+            logger.warning(f"[私聊主动回复] 读取 emotion 状态失败: {exc}")
+            return ""
+        if not isinstance(block, str):
+            logger.debug(
+                f"[私聊主动回复] emotion block 不是字符串 (got {type(block).__name__})，已忽略。"
+            )
+            return ""
+        return block.strip()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -721,17 +790,50 @@ class PrivateProactiveReplyPlugin(star.Star):
             try:
                 persona = await self.context.persona_manager.get_persona(conversation.persona_id)
                 if persona and getattr(persona, "system_prompt", None):
-                    return str(persona.system_prompt)
+                    base = str(persona.system_prompt)
+                    return self._append_emotion_block(base, session_id, conversation)
             except Exception as exc:
                 logger.debug(f"[私聊主动回复] 读取会话人格失败: {exc}")
 
         try:
             default_persona = await self.context.persona_manager.get_default_persona_v3(umo=session_id)
             if isinstance(default_persona, dict):
-                return str(default_persona.get("prompt") or "")
+                base = str(default_persona.get("prompt") or "")
+                return self._append_emotion_block(base, session_id, conversation)
         except Exception as exc:
             logger.debug(f"[私聊主动回复] 读取默认人格失败: {exc}")
-        return ""
+
+        # No persona at all — still allow emotion block to stand alone so
+        # emotional context can survive a missing persona configuration.
+        return self._append_emotion_block("", session_id, conversation)
+
+    def _append_emotion_block(
+        self, base_prompt: str, session_id: str, conversation: Any
+    ) -> str:
+        """Splice the emotion_state_machine block onto a system prompt.
+
+        The emotion block is appended after a blank line so the LLM reads
+        persona first, then the current emotional state. If the conversation
+        has no sender_id we still ask for the group-level snapshot by
+        passing an empty user_id — emotion_state_machine's
+        `build_prompt_block` treats that as "skip the relation layer".
+        """
+        user_id = ""
+        if conversation is not None:
+            sender = getattr(conversation, "user_id", None)
+            if sender is None and getattr(conversation, "persona_id", None) is None:
+                # Conversation objects from AstrBot vary; try a few common
+                # fallbacks. None of these is fatal — we just lose the
+                # per-user relation layer for that call.
+                sender = getattr(conversation, "sender_id", None)
+            if sender is not None:
+                user_id = str(sender)
+        block = self._build_emotion_block(session_id, user_id)
+        if not block:
+            return base_prompt
+        if not base_prompt:
+            return block
+        return base_prompt.rstrip() + "\n\n" + block
 
     async def _send_text(self, session_id: str, text: str) -> None:
         max_len = self._cfg_int("max_reply_chars", 300, 1)

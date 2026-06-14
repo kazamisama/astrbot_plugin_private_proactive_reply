@@ -310,6 +310,171 @@ def test_style_phase_guidance_all_phases_nonempty():
         assert isinstance(text, str) and len(text) > 0, f"empty guidance for {phase}"
 
 
+# ---------------------------------------------------------------------------
+# v0.5.0 helpers: cross-plugin emotion_state_machine integration
+# ---------------------------------------------------------------------------
+
+
+def test_emotion_constants():
+    module = load_module()
+    assert module.EMOTION_STAR_NAME == "astrbot_plugin_emotion_state_machine"
+
+
+def test_build_emotion_block_disabled_by_config():
+    plugin = make_plugin_stub({"emotion_inject_enabled": False})
+    # Even if a context that returns a star is present, config off wins.
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: _FakeEmotionStar())
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_plugin_absent():
+    plugin = make_plugin_stub({})
+    # Context returns None -> "plugin not installed" -> empty block.
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: None)
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_registry_missing_method():
+    plugin = make_plugin_stub({})
+    # Some other plugin shares the name but does not expose the API.
+    plugin.context = SimpleNamespace(
+        get_registered_star=lambda _name: SimpleNamespace(unrelated=1)
+    )
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_registry_raises():
+    plugin = make_plugin_stub({})
+
+    def boom(_name):
+        raise RuntimeError("registry not ready")
+
+    plugin.context = SimpleNamespace(get_registered_star=boom)
+    # Must swallow the exception and return empty, not propagate.
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_remote_call_raises():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(raise_on_call=RuntimeError("engine down"))
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_remote_call_non_string():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value=12345)  # not a str -> ignored
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    assert plugin._build_emotion_block("scope", "u1") == ""
+
+
+def test_build_emotion_block_happy_path():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>calm</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    block = plugin._build_emotion_block("scope-A", "u1")
+    assert block == "<emotion>calm</emotion>"
+    # Verify the star saw the scope + user_id we passed (no normalization
+    # tampering on our side).
+    assert star.last_scope == "scope-A"
+    assert star.last_user_id == "u1"
+
+
+def test_append_emotion_block_disabled_short_circuits():
+    plugin = make_plugin_stub({"emotion_inject_enabled": False})
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: None)
+    # No registry call expected; result is the base prompt unchanged.
+    assert plugin._append_emotion_block("hello", "scope", None) == "hello"
+
+
+def test_append_emotion_block_appends_with_blank_line():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>warm</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    result = plugin._append_emotion_block("you are helpful", "scope", None)
+    assert result == "you are helpful\n\n<emotion>warm</emotion>"
+
+
+def test_append_emotion_block_strips_trailing_whitespace():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>x</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    result = plugin._append_emotion_block("persona prompt   \n\n  ", "scope", None)
+    # No spurious blank line between the persona and the emotion block.
+    assert result == "persona prompt\n\n<emotion>x</emotion>"
+
+
+def test_append_emotion_block_empty_base_returns_block_only():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>solo</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    # When no persona is available we still want the emotion block to land
+    # in the system prompt, not get swallowed.
+    assert plugin._append_emotion_block("", "scope", None) == "<emotion>solo</emotion>"
+
+
+def test_append_emotion_block_passes_user_id_when_present():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>u</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    conversation = SimpleNamespace(user_id="alice", persona_id="p1")
+    plugin._append_emotion_block("base", "scope", conversation)
+    assert star.last_user_id == "alice"
+
+
+def test_append_emotion_block_skips_user_id_when_absent():
+    plugin = make_plugin_stub({})
+    star = _FakeEmotionStar(return_value="<emotion>u</emotion>")
+    plugin.context = SimpleNamespace(get_registered_star=lambda _name: star)
+    # No user_id/sender_id on the conversation -> empty string -> emotion
+    # plugin will skip the per-user relation layer (group snapshot only).
+    plugin._append_emotion_block("base", "scope", SimpleNamespace(persona_id="p1"))
+    assert star.last_user_id == ""
+
+
+def test_get_emotion_plugin_uses_get_registered_star():
+    plugin = make_plugin_stub({})
+    captured = {}
+
+    def fake_get(name):
+        captured["name"] = name
+        return _FakeEmotionStar()
+
+    plugin.context = SimpleNamespace(get_registered_star=fake_get)
+    star = plugin._get_emotion_plugin()
+    assert isinstance(star, _FakeEmotionStar)
+    assert captured["name"] == "astrbot_plugin_emotion_state_machine"
+
+
+def test_get_emotion_plugin_context_without_method():
+    plugin = make_plugin_stub({})
+    # A context that lacks get_registered_star entirely -> None.
+    plugin.context = SimpleNamespace()
+    assert plugin._get_emotion_plugin() is None
+
+
+class _FakeEmotionStar:
+    """Test double for astrbot_plugin_emotion_state_machine's public API.
+
+    Mirrors the only method this plugin calls (build_prompt_block). If the
+    emotion plugin ever renames or removes that method, `_get_emotion_plugin`
+    will return None instead of crashing — which is what we want.
+    """
+
+    def __init__(self, *, return_value: str = "<emotion>ok</emotion>", raise_on_call: Exception | None = None):
+        self._return = return_value
+        self._raise = raise_on_call
+        self.last_scope: str | None = None
+        self.last_user_id: str | None = None
+
+    def build_prompt_block(self, scope: str, user_id: str = "") -> str:
+        self.last_scope = scope
+        self.last_user_id = user_id
+        if self._raise is not None:
+            raise self._raise
+        return self._return
+
+
 def test_reason_guidance_known_reasons():
     plugin = make_plugin_stub({})
     assert "沉默" in plugin._reason_guidance("idle_scan")

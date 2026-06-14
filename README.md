@@ -1,6 +1,6 @@
 # 私聊智能主动回复
 
-> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.2.3 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
+> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.5.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
 
 一个轻量版私聊主动回复插件。参考 `astrbot_plugin_proactive_chat` 的核心思路，但第一版刻意不引入 WebUI、遥测、TTS、复杂多会话覆盖配置，只保留私聊主动回复所需的稳定闭环。
 
@@ -47,6 +47,17 @@ schedule_private_proactive_reply(delay_minutes, reason, mood_hint, message_hint,
 - 发送前仍会检查 `min_interval_minutes`、`max_unanswered_times` 和会话白名单。
 - `message_hint` 只是话题方向，不会直接作为最终消息发送；真正发送时仍由 LLM 结合人格和上下文生成。
 - `idle_fallback_enabled=false` 时，只响应 LLM 排期或管理员手动触发；不会再按固定沉默时间兜底。
+
+## 与情绪状态机联动（v0.5.0）
+
+如果同时安装了 [`astrbot_plugin_emotion_state_machine`](https://github.com/kazamisama/astrbot_plugin_emotion_state_machine)，本插件会在拼装 system prompt 时把情绪插件输出的 prompt block 追加到末尾，让模型主动消息的语气与当前情绪状态对齐。
+
+- 默认开启（`emotion_inject_enabled = true`）。
+- 情绪插件**未装/未启用/未初始化**时**自动降级为空注入**，对未装该插件的用户行为完全不变。
+- scope 传当前私聊 UMO（与情绪插件内置的 `get_scope(event)` 计算结果一致），user_id 透传会话里的 sender_id，让情绪插件能叠加 per-user relation 层。
+- 远程调用抛错只产生 `logger.warning`，**永远不会中断主动消息生成**。
+
+如果你想看情绪插件当前状态，可以在私聊里直接 `/emotion_state`（这是情绪插件自己的命令，与本插件独立）。
 
 ## 临时会话拦截
 

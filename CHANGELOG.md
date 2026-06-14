@@ -2,6 +2,18 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.5.0] - 2026-06-14
+
+### Added
+- **跨插件联动 `astrbot_plugin_emotion_state_machine`**：在生成主动回复的 system prompt 末尾注入情绪状态机输出的 prompt block，让模型语气与当前情绪状态对齐。注入在 `_get_system_prompt` 内部完成，对原有 prompt 模板零侵入。
+- **新增配置 `emotion_inject_enabled`**（默认 `true`）：一键关闭情绪注入。当情绪插件未装/未启用/未初始化时，**自动降级为空注入**，不需要用户做任何额外配置。
+- 新增内部 helper：`_get_emotion_plugin()`（懒加载 + 防御性获取实例）、`_build_emotion_block()`（取 prompt block 并做类型/异常降级）、`_append_emotion_block()`（拼接到 system prompt）。
+- 16 个新单元测试覆盖：常量、配置关闭、插件未装、插件不带公开方法、注册器抛错、远端调用抛错、远端返回非字符串、正常 happy path、append 拼接、尾部空白处理、空 persona fallback、user_id 透传与缺失、context 缺 `get_registered_star` 方法。
+
+### Backward compatibility
+- 完全向后兼容：未安装情绪插件的用户行为与 v0.4.0 一致。
+- `_get_system_prompt` 在没有 persona 时仍允许情绪 block 单独出现，兼容「裸 system prompt」场景。
+
 ## [v0.4.0] - 2026-06-14
 
 ### Changed

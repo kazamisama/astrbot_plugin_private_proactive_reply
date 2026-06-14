@@ -23,6 +23,12 @@
     "default": false,
     "hint": "开启后，session_list 中的会话即使插件启动后未收到用户消息，也会以插件启动时间作为最近活跃时间进行倒计时。"
   },
+  "emotion_inject_enabled": {
+    "description": "💠 注入情绪状态机 prompt block",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，当 astrbot_plugin_emotion_state_machine 已安装并启用时，会把它的情绪 prompt 块附加到主动回复的 system prompt 后面，让模型语气与当前情绪状态对齐。插件未装/未启用时自动降级为空注入，无需额外配置。"
+  },
   "llm_schedule_enabled": {
     "description": "🕰️ 启用 LLM 自主决定下次回复时机",
     "type": "bool",
