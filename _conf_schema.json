@@ -107,7 +107,7 @@
   "idle_probability_start": {
     "description": "🎯 刚到 idle 阈值时的触发概率",
     "type": "float",
-    "default": 0.3,
+    "default": 0.005,
     "hint": "取代旧版「到点必触发」逻辑。空闲刚到 idle_after_minutes 时以该概率触发，之后随时间线性爬升到 1.0。",
     "slider": {
       "min": 0.0,
@@ -129,7 +129,7 @@
   "idle_probability_ramp_minutes": {
     "description": "📈 触发概率爬升时长（分钟）",
     "type": "float",
-    "default": 30.0,
+    "default": 30,
     "hint": "从 idle_probability_start 爬升到 1.0 所需的分钟数。超过该时长后必触发。",
     "slider": {
       "min": 1.0,
@@ -151,13 +151,13 @@
   "idle_after_minutes": {
     "description": "⏳ 用户沉默多久后尝试主动回复（分钟）",
     "type": "float",
-    "default": 30,
+    "default": 175,
     "hint": "距离用户上次私聊消息超过该时长后，才会尝试生成主动消息。"
   },
   "min_interval_minutes": {
     "description": "🧊 两次机器人消息最小间隔（分钟）",
     "type": "float",
-    "default": 60,
+    "default": 180,
     "hint": "防止频繁打扰。普通机器人消息和本插件主动消息都会被计入。"
   },
   "max_unanswered_times": {

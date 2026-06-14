@@ -516,7 +516,7 @@ class PrivateProactiveReplyPlugin(star.Star):
             return None
 
         last_bot = float(state.get("last_bot_message_time") or 0)
-        min_interval = self._cfg_float("min_interval_minutes", 360.0, 0.1) * 60
+        min_interval = self._cfg_float("min_interval_minutes", 180.0, 0.1) * 60
         if last_bot > 0 and now - last_bot < min_interval:
             return None
 
@@ -543,12 +543,12 @@ class PrivateProactiveReplyPlugin(star.Star):
         if not self._cfg_bool("idle_fallback_enabled", True):
             return None
 
-        idle_seconds = self._cfg_float("idle_after_minutes", 120.0, 0.1) * 60
+        idle_seconds = self._cfg_float("idle_after_minutes", 175.0, 0.1) * 60
         idle_elapsed = now - last_user
         if idle_elapsed < idle_seconds:
             return None
 
-        prob_start = self._cfg_float("idle_probability_start", 0.3, 0.0, 1.0)
+        prob_start = self._cfg_float("idle_probability_start", 0.005, 0.0, 1.0)
         ramp_seconds = self._cfg_float("idle_probability_ramp_minutes", 30.0, 0.1, 240.0) * 60
         if not self._idle_probability_roll(
             idle_elapsed, idle_seconds, prob_start, ramp_seconds

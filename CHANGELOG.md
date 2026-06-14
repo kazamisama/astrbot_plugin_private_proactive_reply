@@ -2,6 +2,20 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.5] - 2026-06-14
+
+### Changed
+
+- **默认配置改为“首次主动回复期望约 3 小时”**（原为 README 可选预设，现升为默认）：
+  - `idle_after_minutes`：30 → **175**
+  - `idle_probability_start`：0.3 → **0.005**（压制过早触发，压低方差）
+  - `min_interval_minutes`：60 → **180**（两次主动消息硬下限与 3h 期望对齐）
+  - `idle_probability_ramp_minutes` 保持 **30**
+  - 实测（蒙特卡洛）：均值 ≈ 179.5 min，标准差 ≈ 2.4 min。
+- 同步调整 `main.py` 中对应的运行时兑底默认值（`idle_after_minutes` 120→175、
+  `idle_probability_start` 0.3→0.005、`min_interval_minutes` 360→180），与 schema 一致。
+- README “配置建议”改为说明 3h 预设现已是默认。
+
 ## [v0.6.4] - 2026-06-14
 
 ### Fixed

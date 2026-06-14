@@ -1,7 +1,7 @@
 name: "astrbot_plugin_private_proactive_reply"
 display_name: "私聊智能主动回复"
 author: "chiriu & 橘雪莉"
-version: "v0.6.4"
+version: "v0.6.5"
 desc: "轻量私聊主动回复插件：监听私聊活跃，在沉默一段时间后基于人格与上下文生成自然主动消息。支持 LLM 自主排期下一次主动回复时机。"
 repo: "https://github.com/kazamisama/astrbot_plugin_private_proactive_reply"
 astrbot_version: ">=4.8.0"

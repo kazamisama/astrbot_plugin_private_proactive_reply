@@ -25,18 +25,13 @@
 - `quiet_hours`: 留空
 - `session_list`: 填当前私聊 UMO，或留空并开启 `auto_register_sessions`
 
-稳定后再调回更克制的频率，例如：
-
-- `idle_after_minutes`: `120`
-- `min_interval_minutes`: `360`
-- `max_unanswered_times`: `3`
-- `quiet_hours`: `1-7`
-
-如果希望**首次主动回复的期望时间落在 3 小时**（按 30s 扫描间隔做 4 万次蒙特卡洛模拟验证），推荐：
+测试完恢复默认即可。**自 v0.6.5 起，默认配置就是“首次主动回复期望约 3 小时”**（按 30s 扫描间隔做 4 万次蒙特卡洛模拟验证），即：
 
 - `idle_after_minutes`: `175`（核心：把阈值拉到 175 min）
 - `idle_probability_start`: `0.005`（极低，压制过早触发）
 - `idle_probability_ramp_minutes`: `30`（短斜坡，几乎等同于"3 小时准时"）
+- `min_interval_minutes`: `180`（两次主动消息硬下限，与 3h 期望对齐）
+- `max_unanswered_times`: `5`；`quiet_hours`: `1-7`
 
 实测分布：均值 179.5 min，p10 ≈ 177 min，p90 ≈ 183 min，标准差 ≈ 2.4 min。
 若希望 ±4 min 抖动更自然，把 `idle_probability_start` 改为 `0.010`、`idle_probability_ramp_minutes` 改为 `60`（均值 ≈ 181.2 min，标准差 ≈ 3.4 min）。
