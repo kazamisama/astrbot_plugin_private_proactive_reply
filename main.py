@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import random
 import re
 import time
@@ -129,7 +130,27 @@ class PrivateProactiveReplyPlugin(star.Star):
         try:
             value = float(self.config.get(key, default))
         except (TypeError, ValueError):
-            logger.warning(f"[私聊主动回复] 配置 {key} 不是有效数字，使用默认值 {default}。")
+            logger.warning(
+            f"[private-proactive] config {key} is not a valid "
+            f"number, falling back to default {default}."
+            )
+            value = default
+        # Reject NaN / +inf / -inf before the clamp pair. A
+        # hand-edited config.json (or programmatic write) may carry
+        # the literal strings "NaN" / "Infinity" / "-Infinity" --
+        # float() accepts them without raising, so we must guard
+        # finiteness explicitly. NaN in idle_probability_start makes
+        # `random.random() < prob` always False (silent loss of
+        # proactive replies); NaN/inf in idle_after_minutes * 60 (or
+        # any other second-valued multiplier) lands in asyncio.sleep(...)
+        # which raises ValueError on inf and hangs on NaN -- either way
+        # the scan loop breaks. Fall back to the default so the loop
+        # keeps running. Aligns with esm v0.3.1 and social_context v0.8.4.
+        if not math.isfinite(value):
+            logger.warning(
+            f"[private-proactive] config {key} is non-finite "
+            f"({value!r}), falling back to default {default}."
+            )
             value = default
         if min_value is not None:
             value = max(min_value, value)

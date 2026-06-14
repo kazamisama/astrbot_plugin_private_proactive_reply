@@ -636,3 +636,43 @@ def test_parse_thread_action_keeps_unrelated_lines():
     assert "第二行" in body
     assert "第四行" in body
     assert "THREAD" not in body
+
+# ----------------------------------------------------------------------
+# _cfg_float -- non-finite value defense
+# ----------------------------------------------------------------------
+
+def test_cfg_float_rejects_nan_string():
+    plugin = make_plugin_stub({"idle_after_minutes": "NaN"})
+    assert plugin._cfg_float("idle_after_minutes", 120.0, 0.1) == 120.0
+
+def test_cfg_float_rejects_positive_inf_string():
+    plugin = make_plugin_stub({"idle_after_minutes": "Infinity"})
+    assert plugin._cfg_float("idle_after_minutes", 120.0, 0.1) == 120.0
+
+def test_cfg_float_rejects_negative_inf_string():
+    plugin = make_plugin_stub({"idle_after_minutes": "-Infinity"})
+    assert plugin._cfg_float("idle_after_minutes", 120.0, 0.1) == 120.0
+
+def test_cfg_float_rejects_nan_float_object():
+    plugin = make_plugin_stub({"idle_probability_start": float("nan")})
+    # default 0.3, range [0.0, 1.0]
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.3
+
+def test_cfg_float_rejects_inf_float_object():
+    plugin = make_plugin_stub({"idle_probability_start": float("inf")})
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.3
+
+def test_cfg_float_passes_through_normal_values():
+    # Above min, below max: passes through.
+    plugin = make_plugin_stub({"idle_probability_start": 0.5})
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.5
+    # Below min: clamped up to min.
+    plugin = make_plugin_stub({"idle_probability_start": -0.5})
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.0
+    # Above max: clamped down to max.
+    plugin = make_plugin_stub({"idle_probability_start": 1.5})
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 1.0
+    # Invalid string still falls back to default via the original try/except.
+    plugin = make_plugin_stub({"idle_probability_start": "not-a-number"})
+    assert plugin._cfg_float("idle_probability_start", 0.3, 0.0, 1.0) == 0.3
+

@@ -2,6 +2,30 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.1] - 2026-06-14
+
+### Fixed
+
+- **`_cfg_float` NaN/inf hardens**:
+  Hand-edited `config.json` (or programmatic writes) can carry
+  the literal strings `"NaN"` / `"Infinity"` / `"-Infinity"`.
+  Python `float()` accepts all three without raising, so a value
+  like `idle_probability_start = NaN` was silently propagating
+  into `_compute_idle_probability`, making `random.random() < prob`
+  always False (silent loss of proactive replies); `idle_after_minutes`
+  NaN/inf multiplied into `asyncio.sleep(...)` raised ValueError
+  on inf and hung on NaN -- either way the scan loop broke.
+  `_cfg_float` now rejects non-finite values via `math.isfinite`,
+  logs a WARNING, and falls back to the default. Aligns with
+  `emotion_state_machine` v0.3.1 and `social_context` v0.8.4.
+
+### Added
+
+- 6 new unit tests in `tests/test_helpers.py` covering the
+  NaN / +inf / -inf string + numeric cases and a regression guard
+  for normal value passthrough (including `min_value` / `max_value`
+  clamps).
+
 ## [v0.6.0] - 2026-06-14
 
 ### Changed
