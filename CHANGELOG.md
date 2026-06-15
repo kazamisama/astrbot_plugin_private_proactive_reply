@@ -2,6 +2,26 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.7.0] - 2026-06-15
+
+### Added
+
+- **新增正态分布 idle 触发模型**（`idle_model="normal"`，默认）：
+  - 每段沉默从截断正态分布采样一个目标偏移，有效 idle 达到即触发。
+  - 新配置：`idle_mean_minutes`（均值，默 180=3h）、`idle_sigma_minutes`（标准差，默 15）、`idle_clip_sigma`（截断倍数，默 3.0）。
+  - 默认：**期望 3 小时，3σ 跨度 = 90 分钟（1.5 小时）**。蒙特卡洛实测均值≈180min、σ≈15min。
+  - 目标偏移缓存在 `idle_target_minutes`，用户回话或发送后重置（每段沉默独立采样）。
+
+### Changed
+
+- idle 触发默认从「阈值+概率爬坡」改为正态采样。旧模型仍可用（`idle_model="legacy"`），
+  `idle_after_minutes` / `idle_probability_start` / `idle_probability_ramp_minutes` 仅在 legacy 下生效。
+- 原因：30s 扫描下线性爬坡模型的 σ 被压在 ~2.4min，无法达到期望的 σ=15min；正态模型可精确控制均值与方差。
+
+### Tests
+
+- 新增 4 个测试：采样均值/σ/3σ 跨度、截断边界、零 σ 确定性、目标缓存与重置（共 91 个）。
+
 ## [v0.6.6] - 2026-06-15
 
 ### Added

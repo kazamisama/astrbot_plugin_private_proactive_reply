@@ -384,6 +384,8 @@ class PrivateProactiveReplyPlugin(star.Star):
             state["last_seen_text"] = self._compact_text(event.message_str or "")
             state["unanswered_count"] = 0
             state["last_skip_reason"] = "user_replied"
+            # v0.7.0: new silence stretch -> redraw idle target next time.
+            state.pop("idle_target_minutes", None)
             if event.get_self_id():
                 state["self_id"] = str(event.get_self_id())
             self._mark_dirty()
@@ -558,18 +560,30 @@ class PrivateProactiveReplyPlugin(star.Star):
 
         # v0.6.6: effective idle excludes quiet-window seconds so the idle
         # clock freezes overnight instead of snapping to the quiet boundary.
-        idle_seconds = self._cfg_float("idle_after_minutes", 175.0, 0.1) * 60
         idle_elapsed = self._effective_idle_seconds(last_user, now)
-        if idle_elapsed < idle_seconds:
-            return None
 
-        prob_start = self._cfg_float("idle_probability_start", 0.005, 0.0, 1.0)
-        ramp_seconds = self._cfg_float("idle_probability_ramp_minutes", 30.0, 0.1, 240.0) * 60
-        if not self._idle_probability_roll(
-            idle_elapsed, idle_seconds, prob_start, ramp_seconds
-        ):
-            return None
+        model = str(self.config.get("idle_model", "normal") or "normal").strip().lower()
+        if model == "legacy":
+            # v0.6.0 linear-ramp probability model (kept for back-compat).
+            idle_seconds = self._cfg_float("idle_after_minutes", 175.0, 0.1) * 60
+            if idle_elapsed < idle_seconds:
+                return None
+            prob_start = self._cfg_float("idle_probability_start", 0.005, 0.0, 1.0)
+            ramp_seconds = (
+                self._cfg_float("idle_probability_ramp_minutes", 30.0, 0.1, 240.0) * 60
+            )
+            if not self._idle_probability_roll(
+                idle_elapsed, idle_seconds, prob_start, ramp_seconds
+            ):
+                return None
+            return "idle_scan"
 
+        # v0.7.0 normal model: each idle stretch draws one target offset from
+        # a truncated normal so the first proactive message has a controllable
+        # mean and spread (3-sigma span). Fire once effective idle reaches it.
+        target_seconds = await self._idle_target_seconds(session_id)
+        if idle_elapsed < target_seconds:
+            return None
         return "idle_scan"
 
     def _idle_probability_value(
@@ -615,6 +629,48 @@ class PrivateProactiveReplyPlugin(star.Star):
             elapsed, threshold, prob_start, ramp_seconds
         )
         return random.random() < prob
+
+    def _sample_idle_target_minutes(self) -> float:
+        """Draw one idle target offset (minutes) from a truncated normal.
+
+        mean = idle_mean_minutes, sigma = idle_sigma_minutes, clipped to
+        +/- idle_clip_sigma * sigma. With the defaults (180 / 15 / 3.0) the
+        full +/-3 sigma span is 90 min = 1.5 h, centered on 3 h. Truncation
+        keeps the tails from producing absurd 0-min or many-hour targets;
+        the discarded mass at +/-3 sigma is < 0.3% so the realized sigma is
+        effectively unchanged.
+        """
+        mean = self._cfg_float("idle_mean_minutes", 180.0, 0.1)
+        sigma = self._cfg_float("idle_sigma_minutes", 15.0, 0.0)
+        clip = self._cfg_float("idle_clip_sigma", 3.0, 0.0, 10.0)
+        if sigma <= 0 or clip <= 0:
+            return mean
+        value = random.gauss(mean, sigma)
+        low = mean - clip * sigma
+        high = mean + clip * sigma
+        if value < low:
+            value = low
+        elif value > high:
+            value = high
+        return value if value > 0.1 else 0.1
+
+    async def _idle_target_seconds(self, session_id: str) -> float:
+        """Return the cached idle target (seconds) for this idle stretch,
+        sampling and persisting a fresh one when absent.
+
+        The target is cleared whenever the user replies or a proactive
+        message is sent, so each new silence stretch gets an independent
+        draw -- this is what produces the desired spread across triggers
+        instead of a fixed threshold.
+        """
+        async with self._lock:
+            state = self._get_session_state(session_id)
+            cached = state.get("idle_target_minutes")
+            if not isinstance(cached, (int, float)) or cached <= 0:
+                cached = self._sample_idle_target_minutes()
+                state["idle_target_minutes"] = cached
+                self._mark_dirty()
+        return float(cached) * 60
 
     async def _run_proactive_session(self, session_id: str, reason: str) -> None:
         if session_id in self._running_sessions:
@@ -664,6 +720,8 @@ class PrivateProactiveReplyPlugin(star.Star):
                     state["last_bot_message_time"] = now
                     state["unanswered_count"] = int(state.get("unanswered_count") or 0) + 1
                     self._drop_schedule_fields(state)
+                    # v0.7.0: redraw idle target for the next silence stretch.
+                    state.pop("idle_target_minutes", None)
                     state["last_skip_reason"] = "sent"
                 self._apply_thread_action(
                     state, result["thread_action"], result["thread_payload"]

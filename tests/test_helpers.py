@@ -963,3 +963,70 @@ def test_drop_schedule_fields_clears_reminder_fields():
     p._drop_schedule_fields(state)
     for k in ["next_trigger_time", "scheduled_by", "reminder_recurring", "reminder_time_of_day"]:
         assert k not in state
+
+
+# ----------------------------------------------------------------------
+# v0.7.0: normal-distribution idle target (controllable mean / 3-sigma span)
+# ----------------------------------------------------------------------
+
+import random as _rnd
+import statistics as _stats
+
+
+def test_sample_idle_target_mean_and_sigma():
+    # Defaults: mean=180, sigma=15, clip=3 -> 3-sigma span = 90 min = 1.5 h.
+    plugin = make_plugin_stub(
+        {"idle_mean_minutes": 180, "idle_sigma_minutes": 15, "idle_clip_sigma": 3.0}
+    )
+    _rnd.seed(20260615)
+    samples = [plugin._sample_idle_target_minutes() for _ in range(40000)]
+    mean = _stats.mean(samples)
+    sigma = _stats.pstdev(samples)
+    assert 178.5 < mean < 181.5, f"mean drifted to {mean:.2f}"
+    # Truncation at +/-3 sigma shrinks sigma only slightly; expect ~14.6-15.0.
+    assert 14.0 < sigma < 15.6, f"sigma drifted to {sigma:.2f}"
+    # 6*sigma (the full 3-sigma span) should be close to 90 min.
+    assert 84 < 6 * sigma < 94, f"3-sigma span {6*sigma:.1f} min off target"
+
+
+def test_sample_idle_target_respects_clip_bounds():
+    plugin = make_plugin_stub(
+        {"idle_mean_minutes": 180, "idle_sigma_minutes": 15, "idle_clip_sigma": 3.0}
+    )
+    _rnd.seed(1)
+    lo, hi = 180 - 3 * 15, 180 + 3 * 15  # [135, 225]
+    for _ in range(20000):
+        v = plugin._sample_idle_target_minutes()
+        assert lo <= v <= hi
+
+
+def test_sample_idle_target_zero_sigma_is_deterministic():
+    plugin = make_plugin_stub(
+        {"idle_mean_minutes": 200, "idle_sigma_minutes": 0, "idle_clip_sigma": 3.0}
+    )
+    assert plugin._sample_idle_target_minutes() == 200.0
+
+
+def test_idle_target_seconds_caches_and_resets():
+    import asyncio
+
+    plugin = make_plugin_stub(
+        {"idle_mean_minutes": 180, "idle_sigma_minutes": 15, "idle_clip_sigma": 3.0}
+    )
+    # _idle_target_seconds touches self._lock and self._sessions(); wire the
+    # minimal async-state surface the helper needs.
+    plugin._lock = asyncio.Lock()
+    plugin._state = {"schema_version": 2, "sessions": {}}
+    plugin._dirty = False
+
+    async def go():
+        first = await plugin._idle_target_seconds("s1")
+        second = await plugin._idle_target_seconds("s1")
+        return first, second
+
+    first, second = asyncio.run(go())
+    assert first == second  # cached within the same silence stretch
+    cached_min = plugin._state["sessions"]["s1"]["idle_target_minutes"]
+    assert abs(first - cached_min * 60) < 1e-6
+    # 135..225 min -> 8100..13500 s
+    assert 8100 <= first <= 13500

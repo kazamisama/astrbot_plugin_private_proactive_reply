@@ -25,18 +25,15 @@
 - `quiet_hours`: 留空
 - `session_list`: 填当前私聊 UMO，或留空并开启 `auto_register_sessions`
 
-测试完恢复默认即可。**自 v0.6.5 起，默认配置就是“首次主动回复期望约 3 小时”**（按 30s 扫描间隔做 4 万次蒙特卡洛模拟验证），即：
+测试完恢复默认即可。**自 v0.7.0 起，idle 采用正态分布模型**，默认期望 3 小时、3σ 跨度 1.5 小时（蒙特卡洛实测均值≈180min、σ≈15min）：
 
-- `idle_after_minutes`: `175`（核心：把阈值拉到 175 min）
-- `idle_probability_start`: `0.005`（极低，压制过早触发）
-- `idle_probability_ramp_minutes`: `30`（短斜坡，几乎等同于"3 小时准时"）
-- `min_interval_minutes`: `180`（两次主动消息硬下限，与 3h 期望对齐）
-- `max_unanswered_times`: `5`；`quiet_hours`: `1-7`
+- `idle_model`: `normal`（默认；改为 `legacy` 可回到旧阈值+概率爬坡模型）
+- `idle_mean_minutes`: `180`（期望间隔，分钟）
+- `idle_sigma_minutes`: `15`（标准差；3σ 跨度 = 6×σ = 90 分钟）
+- `idle_clip_sigma`: `3.0`（截断在 ±3σ，防极端值）
 
-实测分布：均值 179.5 min，p10 ≈ 177 min，p90 ≈ 183 min，标准差 ≈ 2.4 min。
-若希望 ±4 min 抖动更自然，把 `idle_probability_start` 改为 `0.010`、`idle_probability_ramp_minutes` 改为 `60`（均值 ≈ 181.2 min，标准差 ≈ 3.4 min）。
+> 调整拖动：想要更大拖动把 `idle_sigma_minutes` 调大（例如 30 → 3σ 跨度 3 小时），更准时调小；均值由 `idle_mean_minutes` 独立决定。legacy 模型下 30s 扫描的 σ 被压在 ~2.4min，无法做出大拖动。
 
-> 说明：决定期望回复时间的主要旋钮是 `idle_after_minutes`，`idle_probability_start` 与 `idle_probability_ramp_minutes` 在 30s 扫描间隔下只控制方差，对均值影响很小（蒙特卡洛实测 0.005 / 0.010 / 0.020 之间的均值差 < 0.5 min）。
 
 ## LLM 自主排期
 

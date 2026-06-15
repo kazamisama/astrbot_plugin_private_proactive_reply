@@ -108,7 +108,7 @@
     "description": "🎯 刚到 idle 阈值时的触发概率",
     "type": "float",
     "default": 0.005,
-    "hint": "取代旧版「到点必触发」逻辑。空闲刚到 idle_after_minutes 时以该概率触发，之后随时间线性爬升到 1.0。",
+    "hint": "[仅 legacy 模型] 取代旧版「到点必触发」逻辑。空闲刚到 idle_after_minutes 时以该概率触发，之后随时间线性爬升到 1.0。",
     "slider": {
       "min": 0.0,
       "max": 1.0,
@@ -130,7 +130,7 @@
     "description": "📈 触发概率爬升时长（分钟）",
     "type": "float",
     "default": 30,
-    "hint": "从 idle_probability_start 爬升到 1.0 所需的分钟数。超过该时长后必触发。",
+    "hint": "[仅 legacy 模型] 从 idle_probability_start 爬升到 1.0 所需的分钟数。超过该时长后必触发。",
     "slider": {
       "min": 1.0,
       "max": 240.0,
@@ -152,7 +152,45 @@
     "description": "⏳ 用户沉默多久后尝试主动回复（分钟）",
     "type": "float",
     "default": 175,
-    "hint": "距离用户上次私聊消息超过该时长后，才会尝试生成主动消息。"
+    "hint": "[仅 legacy 模型] 距离用户上次私聊消息超过该时长后，才会尝试生成主动消息。"
+  },
+  "idle_model": {
+    "description": "🧮 idle 触发模型",
+    "type": "string",
+    "default": "normal",
+    "hint": "normal：正态分布采样目标时间（可控均值/方差，推荐）；legacy：旧的阈值+概率爬坡模型。",
+    "options": [
+      "normal",
+      "legacy"
+    ]
+  },
+  "idle_mean_minutes": {
+    "description": "⏱️ 主动回复期望间隔（分钟，仅 normal）",
+    "type": "float",
+    "default": 180,
+    "hint": "正态模型的均值。默认 180=3 小时。"
+  },
+  "idle_sigma_minutes": {
+    "description": "🎲 期望间隔的标准差（分钟，仅 normal）",
+    "type": "float",
+    "default": 15,
+    "hint": "正态模型的 sigma。3σ 跨度 = 6*sigma。默认 15 → 3σ 跨度 90 分钟（1.5 小时）。",
+    "slider": {
+      "min": 0.0,
+      "max": 120.0,
+      "step": 1.0
+    }
+  },
+  "idle_clip_sigma": {
+    "description": "✂️ 截断倍数（仅 normal）",
+    "type": "float",
+    "default": 3.0,
+    "hint": "采样被截断在 ± 该倍数 × sigma 内，避免极端值。默认 3.0 对应 ±3σ。",
+    "slider": {
+      "min": 0.5,
+      "max": 6.0,
+      "step": 0.5
+    }
   },
   "min_interval_minutes": {
     "description": "🧊 两次机器人消息最小间隔（分钟）",
