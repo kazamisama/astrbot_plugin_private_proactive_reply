@@ -646,7 +646,7 @@ def test_parse_thread_action_keeps_unrelated_lines():
 
 
 # ----------------------------------------------------------------------
-# v0.7.1: platform message history context
+# v0.9.0: platform message history context
 # ----------------------------------------------------------------------
 
 def test_context_source_mode_invalid_falls_back_to_hybrid():

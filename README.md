@@ -1,6 +1,6 @@
 # 私聊智能主动回复
 
-> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.5.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
+> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.9.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
 
 一个轻量版私聊主动回复插件。参考 `astrbot_plugin_proactive_chat` 的核心思路，但第一版刻意不引入 WebUI、遥测、TTS、复杂多会话覆盖配置，只保留私聊主动回复所需的稳定闭环。
 
@@ -11,7 +11,8 @@
 - 自动登记私聊会话，或通过 `session_list` 使用白名单。
 - 模型可调用 `schedule_private_proactive_reply` 工具，自主决定下一次主动回复时机。
 - 没有模型排期时，可按 `idle_after_minutes` 固定沉默时间兜底触发。
-- 使用当前会话人格和最近 conversation 历史，保证语气延续。
+- 使用当前会话人格、最近 conversation 历史和平台真实私聊流水，保证语气延续。
+- 支持 `hybrid` 上下文模式：平台真实聊天流水 + LLM conversation history，减少主动消息割裂感。
 - 支持免打扰时段、最小间隔、连续未回复上限。
 - 状态持久化到插件数据目录 `state.json`，采用脏标记 + 后台批量落盘（`state_flush_interval_seconds`），高频私聊不会每条消息都同步写盘，插件停止时强制落盘。
 - 提供管理员命令查看状态、手动触发、启停会话。
@@ -34,6 +35,17 @@
 
 > 调整拖动：想要更大拖动把 `idle_sigma_minutes` 调大（例如 30 → 3σ 跨度 3 小时），更准时调小；均值由 `idle_mean_minutes` 独立决定。legacy 模型下 30s 扫描的 σ 被压在 ~2.4min，无法做出大拖动。
 
+## 上下文连续性（v0.9.0）
+
+自 v0.9.0 起，主动回复默认使用 `context_source_mode="hybrid"`：
+
+- `conversation_history`：只使用 AstrBot 当前 LLM 对话历史。
+- `platform_message_history`：只使用平台最近真实聊天流水。
+- `hybrid`：平台真实聊天流水 + LLM 对话历史，通常最能减少“突然换话题/像重新开局”的割裂感。
+
+平台流水会以事实参考形式注入，不作为新的用户请求，也不能覆盖系统设定或本次最终指令。可通过 `platform_history_count`、`platform_context_max_chars`、`include_bot_messages`、`bot_identifiers` 控制注入范围。
+
+如果配置文件里仍保留旧版默认 `proactive_prompt`，`auto_upgrade_legacy_prompt=true` 时会运行时临时使用新版默认模板，让 `THREAD`、上次主动消息、风格阶段、话题提示等字段真正进入模型。
 
 ## LLM 自主排期
 

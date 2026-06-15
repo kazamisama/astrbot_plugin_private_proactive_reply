@@ -2,6 +2,32 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.9.0] - 2026-06-15
+
+### Added
+
+- **新增主动回复上下文来源配置 `context_source_mode`**：
+  - `conversation_history`：只使用 AstrBot 当前 LLM 对话历史。
+  - `platform_message_history`：只使用平台最近真实聊天流水。
+  - `hybrid`（默认）：平台真实聊天流水 + LLM 对话历史，减少主动消息像“重新开局”的割裂感。
+- 新增平台流水注入配置：`platform_history_count`、`platform_context_max_chars`、`include_bot_messages`、`bot_identifiers`、`platform_history_prompt`。
+- 新增旧版默认 prompt 自动升级开关 `auto_upgrade_legacy_prompt`，检测到旧默认模板时运行时临时使用新版默认模板。
+
+### Changed
+
+- 主动回复生成前会读取 AstrBot `message_history_manager` 中的真实平台消息记录，并格式化为事实上下文。
+- webchat 兼容：读取平台流水时会同时尝试完整 UMO 用户键和最后一段 session id。
+- 平台流水作为 `user` 上下文注入，避免覆盖 persona system prompt，并兼容 Gemini/Anthropic 等 provider 对 system message 的特殊处理。
+
+### Fixed
+
+- LLM 生成期间如果用户已经回复，本次主动消息会被丢弃并标记 `user_replied_during_generation`，避免刚聊上时插入过期主动话题。
+- 旧版默认 `proactive_prompt` 缺少 `THREAD`、上次主动消息、风格阶段等新字段导致自然化能力实际未生效的问题。
+
+### Tests
+
+- 新增平台流水上下文、模式兜底、webchat user key fallback、旧模板识别等 helper 测试（共 98 个）。
+
 ## [v0.8.0] - 2026-06-15
 
 ### Added
