@@ -18,7 +18,7 @@ import math
 import random
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -500,14 +500,26 @@ class PrivateProactiveReplyPlugin(star.Star):
             return None
         if not self._is_session_allowed(session_id, allow_auto_register=False):
             return None
-        if self._is_quiet_now():
-            await self._mark_skip(session_id, "quiet_hours")
-            return None
 
         async with self._lock:
             state = dict(self._sessions().get(session_id, {}))
 
         if not state.get("enabled", True):
+            return None
+
+        # v0.6.6: a reminder scheduled via schedule_proactive_reminder_at is
+        # user-requested for a specific clock time and must fire even inside
+        # quiet_hours. Detect it before the quiet gate so only idle /
+        # relative-delay triggers are suppressed at night.
+        next_trigger_time = float(state.get("next_trigger_time") or 0)
+        is_reminder = (
+            next_trigger_time > 0 and state.get("scheduled_by") == "reminder_tool"
+        )
+        if is_reminder and now >= next_trigger_time:
+            return str(state.get("next_reason") or "reminder")
+
+        if self._is_quiet_now():
+            await self._mark_skip(session_id, "quiet_hours")
             return None
 
         last_user = float(state.get("last_user_message_time") or 0)
@@ -534,7 +546,8 @@ class PrivateProactiveReplyPlugin(star.Star):
                 await self._mark_skip(session_id, "max_unanswered")
                 return None
 
-        next_trigger_time = float(state.get("next_trigger_time") or 0)
+        # Non-reminder schedule (relative-delay llm_tool): honor planned time,
+        # subject to the quiet gate already passed above.
         if next_trigger_time > 0:
             if now >= next_trigger_time:
                 return str(state.get("next_reason") or "llm_scheduled")
@@ -543,8 +556,10 @@ class PrivateProactiveReplyPlugin(star.Star):
         if not self._cfg_bool("idle_fallback_enabled", True):
             return None
 
+        # v0.6.6: effective idle excludes quiet-window seconds so the idle
+        # clock freezes overnight instead of snapping to the quiet boundary.
         idle_seconds = self._cfg_float("idle_after_minutes", 175.0, 0.1) * 60
-        idle_elapsed = now - last_user
+        idle_elapsed = self._effective_idle_seconds(last_user, now)
         if idle_elapsed < idle_seconds:
             return None
 
@@ -619,13 +634,37 @@ class PrivateProactiveReplyPlugin(star.Star):
             async with self._lock:
                 state = self._get_session_state(session_id)
                 now = time.time()
-                state["last_bot_message_time"] = now
+                # v0.6.6: a reminder fired here is fully isolated from idle.
+                # It must NOT touch last_bot_message_time / unanswered_count
+                # (those drive idle / min_interval), and a recurring reminder
+                # reschedules itself for the next day instead of being dropped.
+                is_reminder = state.get("scheduled_by") == "reminder_tool"
+                recurring = bool(state.get("reminder_recurring"))
+                reminder_tod = str(state.get("reminder_time_of_day") or "")
                 state["last_proactive_time"] = now
                 state["last_proactive_reason"] = reason
                 state["last_proactive_text_preview"] = self._compact_text(text, 120)
-                state["unanswered_count"] = int(state.get("unanswered_count") or 0) + 1
-                self._drop_schedule_fields(state)
-                state["last_skip_reason"] = "sent"
+                if is_reminder:
+                    next_reason = state.get("next_reason")
+                    next_mood = state.get("next_mood_hint")
+                    next_msg = state.get("next_message_hint")
+                    self._drop_schedule_fields(state)
+                    if recurring and reminder_tod:
+                        nxt = self._next_time_of_day_ts(reminder_tod, now=now)
+                        if nxt is not None:
+                            state["next_trigger_time"] = nxt
+                            state["next_reason"] = next_reason or "reminder"
+                            state["next_mood_hint"] = next_mood or ""
+                            state["next_message_hint"] = next_msg or ""
+                            state["scheduled_by"] = "reminder_tool"
+                            state["reminder_recurring"] = True
+                            state["reminder_time_of_day"] = reminder_tod
+                    state["last_skip_reason"] = "reminder_sent"
+                else:
+                    state["last_bot_message_time"] = now
+                    state["unanswered_count"] = int(state.get("unanswered_count") or 0) + 1
+                    self._drop_schedule_fields(state)
+                    state["last_skip_reason"] = "sent"
                 self._apply_thread_action(
                     state, result["thread_action"], result["thread_payload"]
                 )
@@ -677,6 +716,8 @@ class PrivateProactiveReplyPlugin(star.Star):
         state.pop("next_mood_hint", None)
         state.pop("next_message_hint", None)
         state.pop("scheduled_by", None)
+        state.pop("reminder_recurring", None)
+        state.pop("reminder_time_of_day", None)
 
     async def _clear_schedule(self, session_id: str) -> None:
         async with self._lock:
@@ -760,6 +801,77 @@ class PrivateProactiveReplyPlugin(star.Star):
             "已安排下一次私聊主动回复："
             f"{self._format_timestamp(trigger_time)}；"
             f"原因：{self._compact_text(reason or 'llm_scheduled', 80)}"
+        )
+
+    @filter.llm_tool(name="schedule_proactive_reminder_at")
+    async def schedule_proactive_reminder_at(
+        self,
+        event: AstrMessageEvent,
+        time_of_day: str,
+        reason: str = "",
+        message_hint: str = "",
+        mood_hint: str = "",
+        date: str = "",
+        recurring: bool = False,
+        overwrite: bool = False,
+    ) -> str:
+        """在指定的具体时间点（而非相对延迟）安排一次私聊主动提醒。
+
+        当用户明确要求“某个时间点提醒我做某事”（例如“9点提醒我开会”“每天早上8点叫我起床”）时调用。与 schedule_private_proactive_reply 不同：本工具按钟点时间触发，且到点必发——即使落在免打扰时段也照发，因为这是用户主动预约的。它与日常 idle 主动回复完全隔离，不会重置或影响 idle 计时。
+
+        Args:
+            time_of_day(string): 钟点时间，24 小时制 "HH:MM"，例如 "09:00"。
+            reason(string): 简短说明提醒内容，例如“提醒开会”。
+            message_hint(string): 可选话题提示，只写方向，不要写完整消息。
+            mood_hint(string): 可选语气提示。
+            date(string): 可选日期 "YYYY-MM-DD"。省略则取下一个该钟点（今天若已过则明天）。
+            recurring(boolean): 是否每天重复。默认 false。
+            overwrite(boolean): 若已有计划是否覆盖。默认 false。
+        """
+        if not self._cfg_bool("llm_schedule_enabled", True):
+            return "排期失败：LLM 自主排期功能未启用。"
+
+        session_id = getattr(event, "unified_msg_origin", "") or ""
+        if not session_id or "FriendMessage" not in session_id:
+            return "排期失败：这个工具只允许在私聊会话中使用。"
+
+        if self._is_blocked_private_event(event):
+            return "排期失败：已忽略非好友私聊或群临时会话。"
+
+        if not self._is_session_allowed(session_id, allow_auto_register=True):
+            return "排期失败：当前私聊不在允许列表内。"
+
+        now = time.time()
+        trigger_time = self._next_time_of_day_ts(time_of_day, date=date, now=now)
+        if trigger_time is None:
+            return "排期失败：time_of_day 需为 \"HH:MM\"（如 \"09:00\"），date 若提供需为 \"YYYY-MM-DD\"。"
+        if trigger_time <= now:
+            return "排期失败：指定的时间点已经过去，请改用将来的时间或省略 date。"
+
+        # Reminders deliberately do NOT call _defer_quiet_time, and do NOT
+        # touch last_user_message_time / last_bot_message_time (full idle
+        # isolation).
+        async with self._lock:
+            state = self._get_session_state(session_id)
+            existing = float(state.get("next_trigger_time") or 0)
+            if existing > now and not overwrite:
+                existing_text = self._format_timestamp(existing)
+                return f"已有下一次主动回复计划：{existing_text}。如需覆盖，请设置 overwrite=true。"
+            state["next_trigger_time"] = trigger_time
+            state["next_reason"] = self._compact_text(reason or "reminder", 120)
+            state["next_mood_hint"] = self._compact_text(mood_hint, 120)
+            state["next_message_hint"] = self._compact_text(message_hint, 200)
+            state["scheduled_by"] = "reminder_tool"
+            state["reminder_recurring"] = bool(recurring)
+            state["reminder_time_of_day"] = self._compact_text(time_of_day, 8) if recurring else ""
+            state["last_skip_reason"] = "reminder_scheduled"
+            self._mark_dirty()
+
+        suffix = "（每天重复）" if recurring else ""
+        return (
+            "已安排私聊提醒："
+            f"{self._format_timestamp(trigger_time)}{suffix}；"
+            f"内容：{self._compact_text(reason or 'reminder', 80)}"
         )
 
     # ------------------------------------------------------------------
@@ -985,6 +1097,82 @@ class PrivateProactiveReplyPlugin(star.Star):
         if not allowed:
             allowed = {"friend"}
         return sub_type not in allowed
+
+    def _parse_quiet_window(self):
+        quiet = str(self.config.get("quiet_hours", "1-7") or "").strip()
+        if not quiet:
+            return None
+        match = re.fullmatch(r"\s*(\d{1,2})\s*-\s*(\d{1,2})\s*", quiet)
+        if not match:
+            return None
+        start = int(match.group(1)) % 24
+        end = int(match.group(2)) % 24
+        if start == end:
+            return None
+        return start, end
+
+    def _hour_is_quiet(self, hour: int, window) -> bool:
+        start, end = window
+        if start < end:
+            return start <= hour < end
+        return hour >= start or hour < end
+
+    def _quiet_seconds_between(self, start_ts: float, end_ts: float) -> float:
+        """Count seconds in [start_ts, end_ts) inside quiet hours.
+
+        Subtracted from the idle clock (v0.6.6) so a gap spanning the night
+        does not accumulate during do-not-disturb. Per-minute walk; the idle
+        horizon is hours so this is cheap and exact enough."""
+        window = self._parse_quiet_window()
+        if window is None or end_ts <= start_ts:
+            return 0.0
+        tz = self._timezone()
+        step = 60.0
+        quiet = 0.0
+        t = start_ts
+        while t < end_ts:
+            chunk = min(step, end_ts - t)
+            hour = datetime.fromtimestamp(t, tz=tz).hour
+            if self._hour_is_quiet(hour, window):
+                quiet += chunk
+            t += step
+        return quiet
+
+    def _effective_idle_seconds(self, last_user: float, now: float) -> float:
+        """Idle seconds since the user last spoke, quiet-window time excluded
+        (v0.6.6). Freezes the idle clock during quiet hours so the post-quiet
+        first message lands naturally instead of snapping to the boundary."""
+        if last_user <= 0 or now <= last_user:
+            return 0.0
+        gross = now - last_user
+        quiet = self._quiet_seconds_between(last_user, now)
+        effective = gross - quiet
+        return effective if effective > 0 else 0.0
+
+    def _next_time_of_day_ts(self, time_of_day, date="", now=None):
+        """Resolve "HH:MM" (optionally on YYYY-MM-DD) to an absolute epoch ts
+        in the configured tz. Without date: next future occurrence."""
+        m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", time_of_day or "")
+        if not m:
+            return None
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if hh > 23 or mm > 59:
+            return None
+        tz = self._timezone()
+        base = datetime.fromtimestamp(now if now is not None else time.time(), tz=tz)
+        if date:
+            dm = re.fullmatch(r"\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*", date)
+            if not dm:
+                return None
+            try:
+                target = base.replace(year=int(dm.group(1)), month=int(dm.group(2)), day=int(dm.group(3)), hour=hh, minute=mm, second=0, microsecond=0)
+            except ValueError:
+                return None
+            return target.timestamp()
+        target = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if target.timestamp() <= base.timestamp():
+            target = target + timedelta(days=1)
+        return target.timestamp()
 
     def _is_quiet_timestamp(self, ts: float) -> bool:
         quiet = str(self.config.get("quiet_hours", "1-7") or "").strip()

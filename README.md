@@ -65,6 +65,21 @@ schedule_private_proactive_reply(delay_minutes, reason, mood_hint, message_hint,
 
 如果你想看情绪插件当前状态，可以在私聊里直接 `/emotion_state`（这是情绪插件自己的命令，与本插件独立）。
 
+## 绝对时间提醒（v0.6.6）
+
+除了按相对延迟排期的 `schedule_private_proactive_reply`，插件还提供按**钟点时间**触发的提醒工具：
+
+```text
+schedule_proactive_reminder_at(time_of_day="HH:MM", reason, message_hint, mood_hint, date="YYYY-MM-DD", recurring=false, overwrite=false)
+```
+
+- 当用户明确说“9 点提醒我 X”“每天早上 8 点叫我起床”时，模型可调用它。
+- **到点必发**：即使落在 `quiet_hours` 免打扰时段也照常提醒（因为是用户主动预约）。
+- **与 idle 完全隔离**：不重置也不压制日常 idle 主动回复的节奏。
+- `recurring=true` 时发送后自动重排次日同钟点；省略 `date` 取下一个该钟点（今天若已过则明天）。
+
+> 注：日常 idle 主动回复仍受 `quiet_hours` 约束，且自 v0.6.6 起 idle 计时**不再在免打扰时段累积**（有效 idle = 沉默总时长 − 落在勿扰区的时长）。
+
 ## 临时会话拦截
 
 默认开启 `ignore_non_friend_private=true`。在 aiocqhttp/OneBot 私聊事件里，如果原始事件 `sub_type` 不是允许列表 `allowed_private_sub_types`（默认只有 `friend`），插件会跳过记录和排期。这样 QQ 群临时会话不会触发私聊主动回复。

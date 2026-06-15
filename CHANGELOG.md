@@ -2,6 +2,28 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.6.6] - 2026-06-15
+
+### Added
+
+- **新增绝对时间提醒工具 `schedule_proactive_reminder_at`**（`@filter.llm_tool`）：
+  - 按钟点时间触发（`time_of_day="HH:MM"`，可选 `date="YYYY-MM-DD"` 与 `recurring`）。
+  - **到点必发**：即使落在免打扰时段也照发（不走 `_defer_quiet_time`、不被 `_is_quiet_now` 拦截）。
+  - **与 idle 完全隔离**：不触碰 `last_user_message_time` / `last_bot_message_time` / `unanswered_count`，不重置也不压制 idle 节奏。
+  - `recurring=true` 时发送后自动重排次日同钟点。
+
+### Changed
+
+- **idle 兑底不再在免打扰时段累积**：新增 `_effective_idle_seconds`，从 idle 时长中
+  扣除沉默期落在 `quiet_hours` 内的秒数。避免“夜间挤压的 idle 在勿扰一解禁就
+  立刻在边界（如 07:00 整）爆发”，首条主动消息落在更自然的时间。
+- `_get_trigger_reason` 重构：reminder 在勿扰闸之前豁免；idle 改用有效时长。
+
+### Tests
+
+- 新增 9 个测试：勿扰秒数统计、有效 idle 扣除、`HH:MM`/`date` 解析与边界、
+  reminder 字段清理（共 87 个）。
+
 ## [v0.6.5] - 2026-06-14
 
 ### Changed

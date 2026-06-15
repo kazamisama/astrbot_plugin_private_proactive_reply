@@ -861,3 +861,98 @@ def test_describe_exception_extracts_body_and_status():
 def test_describe_exception_empty_on_plain_exception():
     plugin = make_plugin_stub({})
     assert plugin._describe_exception(ValueError("nope")) == ""
+
+
+# ----------------------------------------------------------------------
+# v0.6.6: quiet-aware effective idle + absolute-time reminder
+# ----------------------------------------------------------------------
+
+from datetime import datetime as _dt
+from zoneinfo import ZoneInfo as _ZI
+
+_TZ = "Asia/Shanghai"
+
+
+def _ts(y, mo, d, h, mi=0):
+    return _dt(y, mo, d, h, mi, tzinfo=_ZI(_TZ)).timestamp()
+
+
+def _idle_plugin():
+    return make_plugin_stub({"quiet_hours": "1-7", "timezone": _TZ})
+
+
+def test_quiet_seconds_zero_when_disabled():
+    p = make_plugin_stub({"quiet_hours": "", "timezone": _TZ})
+    a = _ts(2026, 6, 15, 2, 0)
+    b = _ts(2026, 6, 15, 6, 0)
+    assert p._quiet_seconds_between(a, b) == 0.0
+
+
+def test_quiet_seconds_full_window_inside():
+    # 02:00 -> 06:00 is entirely inside quiet 1-7 -> 4h counted.
+    p = _idle_plugin()
+    a = _ts(2026, 6, 15, 2, 0)
+    b = _ts(2026, 6, 15, 6, 0)
+    assert abs(p._quiet_seconds_between(a, b) - 4 * 3600) < 120
+
+
+def test_effective_idle_excludes_quiet_span():
+    # user last spoke 23:00; now 09:00 next day. Gross = 10h.
+    # quiet 1-7 fully inside -> 6h subtracted -> effective ~4h.
+    p = _idle_plugin()
+    last = _ts(2026, 6, 14, 23, 0)
+    now = _ts(2026, 6, 15, 9, 0)
+    eff = p._effective_idle_seconds(last, now)
+    assert abs(eff - 4 * 3600) < 300  # within 5 min tolerance
+
+
+def test_effective_idle_equals_gross_when_no_quiet_overlap():
+    p = _idle_plugin()
+    last = _ts(2026, 6, 15, 9, 0)
+    now = _ts(2026, 6, 15, 12, 0)
+    eff = p._effective_idle_seconds(last, now)
+    assert abs(eff - 3 * 3600) < 5
+
+
+def test_next_time_of_day_future_today():
+    p = _idle_plugin()
+    now = _ts(2026, 6, 15, 8, 0)
+    got = p._next_time_of_day_ts("09:00", now=now)
+    assert abs(got - _ts(2026, 6, 15, 9, 0)) < 1
+
+
+def test_next_time_of_day_rolls_to_tomorrow():
+    p = _idle_plugin()
+    now = _ts(2026, 6, 15, 10, 0)
+    got = p._next_time_of_day_ts("09:00", now=now)
+    assert abs(got - _ts(2026, 6, 16, 9, 0)) < 1
+
+
+def test_next_time_of_day_with_explicit_date():
+    p = _idle_plugin()
+    now = _ts(2026, 6, 15, 10, 0)
+    got = p._next_time_of_day_ts("09:00", date="2026-06-20", now=now)
+    assert abs(got - _ts(2026, 6, 20, 9, 0)) < 1
+
+
+def test_next_time_of_day_rejects_bad_format():
+    p = _idle_plugin()
+    assert p._next_time_of_day_ts("9am") is None
+    assert p._next_time_of_day_ts("25:00") is None
+    assert p._next_time_of_day_ts("09:00", date="not-a-date") is None
+
+
+def test_drop_schedule_fields_clears_reminder_fields():
+    p = make_plugin_stub({})
+    state = {
+        "next_trigger_time": 123.0,
+        "scheduled_by": "reminder_tool",
+        "reminder_recurring": True,
+        "reminder_time_of_day": "09:00",
+        "next_reason": "x",
+        "next_mood_hint": "",
+        "next_message_hint": "",
+    }
+    p._drop_schedule_fields(state)
+    for k in ["next_trigger_time", "scheduled_by", "reminder_recurring", "reminder_time_of_day"]:
+        assert k not in state
