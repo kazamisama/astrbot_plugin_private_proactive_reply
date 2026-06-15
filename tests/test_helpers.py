@@ -644,6 +644,102 @@ def test_parse_thread_action_keeps_unrelated_lines():
     assert "第四行" in body
     assert "THREAD" not in body
 
+
+# ----------------------------------------------------------------------
+# v0.7.1: platform message history context
+# ----------------------------------------------------------------------
+
+def test_context_source_mode_invalid_falls_back_to_hybrid():
+    plugin = make_plugin_stub({"context_source_mode": "unknown"})
+    assert plugin._context_source_mode() == "hybrid"
+
+
+def test_context_source_mode_accepts_known_values_case_insensitive():
+    plugin = make_plugin_stub({"context_source_mode": " Platform_Message_History "})
+    assert plugin._context_source_mode() == "platform_message_history"
+
+
+def test_platform_history_user_candidates_adds_webchat_tail():
+    plugin = make_plugin_stub({})
+    assert plugin._platform_history_user_candidates("webchat!alice!session-1") == [
+        "webchat!alice!session-1",
+        "session-1",
+    ]
+
+
+def test_platform_history_user_candidates_dedupes_tail():
+    plugin = make_plugin_stub({})
+    assert plugin._platform_history_user_candidates("session-1") == ["session-1"]
+
+
+def test_format_platform_history_context_builds_user_block_and_filters_bot():
+    plugin = make_plugin_stub(
+        {
+            "include_bot_messages": False,
+            "bot_identifiers": "bot,astrbot",
+            "platform_context_max_chars": 10000,
+            "platform_history_prompt": (
+                "PLATFORM\n{{platform_history_lines}}\n"
+                "UNANSWERED={{unanswered_count}}"
+            ),
+        }
+    )
+    records = [
+        {
+            "sender_id": "alice",
+            "sender_name": "Alice",
+            "content": {
+                "type": "user",
+                "message": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image"},
+                ],
+            },
+        },
+        {
+            "sender_id": "bot",
+            "sender_name": "bot",
+            "content": {
+                "type": "bot",
+                "message": [{"type": "text", "text": "bot reply"}],
+            },
+        },
+        {
+            "sender_id": "alice",
+            "sender_name": "Alice",
+            "content": {
+                "type": "user",
+                "message": [{"type": "text", "text": "later"}],
+            },
+        },
+    ]
+
+    block = plugin._format_platform_history_context(records, unanswered_count=2)
+
+    assert block is not None
+    assert block["role"] == "user"
+    assert "1. Alice: hello[图片]" in block["content"]
+    assert "2. Alice: later" in block["content"]
+    assert "bot reply" not in block["content"]
+    assert "UNANSWERED=2" in block["content"]
+
+
+def test_prompt_looks_like_legacy_default_detects_old_template():
+    plugin = make_plugin_stub({})
+    legacy = "[当前状态]\n- idle={{idle_minutes}}\n\n[最终指令]\n自然发一句。"
+    assert plugin._prompt_looks_like_legacy_default(legacy) is True
+
+
+def test_prompt_looks_like_legacy_default_rejects_new_template():
+    plugin = make_plugin_stub({})
+    new_template = (
+        "[当前状态]\n"
+        "{{last_proactive_text_preview}}\n"
+        "[最终指令]\n"
+        "THREAD: <push|pop|none>"
+    )
+    assert plugin._prompt_looks_like_legacy_default(new_template) is False
+
 # ----------------------------------------------------------------------
 # _cfg_float -- non-finite value defense
 # ----------------------------------------------------------------------
