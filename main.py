@@ -686,7 +686,10 @@ class PrivateProactiveReplyPlugin(star.Star):
             if not text:
                 await self._mark_skip(session_id, "empty_after_sanitize")
                 return
-            await self._send_text(session_id, text)
+            sent = await self._send_text(session_id, text)
+            if not sent:
+                await self._mark_skip(session_id, "platform_excluded")
+                return
             async with self._lock:
                 state = self._get_session_state(session_id)
                 now = time.time()
@@ -1107,11 +1110,23 @@ class PrivateProactiveReplyPlugin(star.Star):
             return block
         return base_prompt.rstrip() + "\n\n" + block
 
-    async def _send_text(self, session_id: str, text: str) -> None:
+    async def _send_text(self, session_id: str, text: str) -> bool:
+        excluded = {
+            str(p).strip().lower()
+            for p in self._cfg_list("excluded_platforms")
+            if str(p).strip()
+        }
+        platform = session_id.split(":", 1)[0].strip().lower()
+        if platform in excluded:
+            logger.info(
+                f"[私聊主动回复] 平台 {platform} 在排除列表中，跳过主动消息: {session_id}"
+            )
+            return False
+
         max_len = self._cfg_int("max_reply_chars", 300, 1)
         text = text[:max_len].strip()
         if not text:
-            return
+            return False
 
         if self._cfg_bool("enable_segmented_send", False):
             segments = self._split_text(text)
@@ -1119,9 +1134,10 @@ class PrivateProactiveReplyPlugin(star.Star):
                 await self.context.send_message(session_id, MessageChain([Plain(text=segment)]))
                 if index < len(segments) - 1:
                     await asyncio.sleep(self._cfg_float("segment_interval_seconds", 1.2, 0.0))
-            return
+            return True
 
         await self.context.send_message(session_id, MessageChain([Plain(text=text)]))
+        return True
 
     # ------------------------------------------------------------------
     # Guards and formatting helpers

@@ -2,6 +2,20 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.8.0] - 2026-06-15
+
+### Added
+
+- **新增平台排除配置 `excluded_platforms`**（默认 `["webchat"]`）：
+  - session_id 平台段（冒号前第一段）命中列表时，跳过主动消息发送。
+  - 原因：webchat 等平台无法可靠主动推送，之前会走到发送逻辑并误报“已发送”。
+
+### Fixed
+
+- `_send_text` 被平台排除拦截时返回 `False`，`_run_proactive_session` 据此早退并 `_mark_skip("platform_excluded")`：
+  - 不再误打“已发送主动消息”日志。
+  - 不再污染 `last_proactive_time` / `unanswered_count` 等状态。
+
 ## [v0.7.0] - 2026-06-15
 
 ### Added

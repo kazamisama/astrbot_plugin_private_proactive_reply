@@ -11,6 +11,14 @@
     "default": [],
     "hint": "留空时可自动登记发生过消息的私聊；填写后只对列表内会话生效。格式示例：webchat:FriendMessage:chiriu 或 default:FriendMessage:123456。"
   },
+  "excluded_platforms": {
+    "description": "🚫 不发送主动消息的平台",
+    "type": "list",
+    "default": [
+      "webchat"
+    ],
+    "hint": "session_id 平台段（冒号前第一段）命中列表时，跳过主动消息发送。webchat 等无法可靠主动推送的平台建议保留。留空则对所有平台发送。"
+  },
   "auto_register_sessions": {
     "description": "📝 自动登记私聊会话",
     "type": "bool",
