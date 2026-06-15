@@ -228,10 +228,17 @@ def test_idle_probability_value_zero_ramp():
 
 def test_idle_probability_roll_respects_extremes():
     plugin = make_plugin_stub({})
-    # prob_start=0 -> never fires (no matter how long the idle).
-    assert plugin._idle_probability_roll(2000, 1800, 0.0, 1800) is False
-    # prob_start=1 -> always fires.
-    assert plugin._idle_probability_roll(2000, 1800, 1.0, 1800) is True
+    # Use intervals where the probability is deterministically 0.0 or 1.0 so
+    # the roll is not random. Previously this test fed elapsed=2000 (past the
+    # 1800 threshold but inside the 1800s ramp), where prob_start=0.0 still
+    # yields p=200/1800=0.111 -> the roll fired ~11% of runs and the test
+    # was flaky. The roll only returns a stable boolean when p is pinned.
+    #
+    # p == 0.0: at/below the threshold the curve is pinned to 0 regardless of
+    # prob_start -> never fires.
+    assert plugin._idle_probability_roll(1800, 1800, 0.5, 1800) is False
+    # p == 1.0: at/after the ramp end the curve is pinned to 1 -> always fires.
+    assert plugin._idle_probability_roll(3600, 1800, 0.0, 1800) is True
 
 
 # ---------------------------------------------------------------------------
