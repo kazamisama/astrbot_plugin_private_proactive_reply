@@ -1208,6 +1208,8 @@ def test_pipeline_replays_wake_event_to_queue():
     assert event.get_extra("proactive_reply_reason") == "idle_scan"
     assert event.message_str == event.get_extra("proactive_reply_wake_text")
     assert "主动消息唤醒" in event.message_str
+    assert event.is_at_or_wake_command is True
+    assert event.call_llm is False
 
 
 def test_pipeline_wake_prompt_uses_reminder_wording():

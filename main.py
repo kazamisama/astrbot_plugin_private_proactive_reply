@@ -887,7 +887,6 @@ class PrivateProactiveReplyPlugin(star.Star):
                 },
                 message_type=session.message_type,
             )
-            cron_event.should_call_llm(True)
         except Exception as exc:
             logger.error(f"[私聊主动回复] pipeline 构造事件失败 {session_id}: {exc}", exc_info=True)
             await self._mark_skip(session_id, f"pipeline_event_error:{type(exc).__name__}")
