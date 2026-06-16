@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import importlib.util
-from datetime import datetime
+import random as _rnd
+import statistics as _stats
+from datetime import datetime, datetime as _dt
 from pathlib import Path
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfo as _ZI
 
 PLUGIN_MAIN = Path(__file__).resolve().parents[1] / "main.py"
 
@@ -970,9 +973,6 @@ def test_describe_exception_empty_on_plain_exception():
 # v0.6.6: quiet-aware effective idle + absolute-time reminder
 # ----------------------------------------------------------------------
 
-from datetime import datetime as _dt
-from zoneinfo import ZoneInfo as _ZI
-
 _TZ = "Asia/Shanghai"
 
 
@@ -1065,10 +1065,6 @@ def test_drop_schedule_fields_clears_reminder_fields():
 # v0.7.0: normal-distribution idle target (controllable mean / 3-sigma span)
 # ----------------------------------------------------------------------
 
-import random as _rnd
-import statistics as _stats
-
-
 def test_sample_idle_target_mean_and_sigma():
     # Defaults: mean=180, sigma=15, clip=3 -> 3-sigma span = 90 min = 1.5 h.
     plugin = make_plugin_stub(
@@ -1126,3 +1122,90 @@ def test_idle_target_seconds_caches_and_resets():
     assert abs(first - cached_min * 60) < 1e-6
     # 135..225 min -> 8100..13500 s
     assert 8100 <= first <= 13500
+
+
+def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
+    import asyncio
+
+    module = load_module()
+    if not module._PIPELINE_AGENT_AVAILABLE:
+        return
+
+    session_id = "webchat:FriendMessage:user1"
+    initial_history = [{"role": "user", "content": "刚才聊到部署结果"}]
+    conversation = SimpleNamespace(cid="conv1", history=json.dumps(initial_history))
+
+    class _ConvManager:
+        def __init__(self):
+            self.updated_history = None
+
+        async def get_curr_conversation_id(self, umo):
+            assert umo == session_id
+            return conversation.cid
+
+        async def new_conversation(self, umo, platform_id=None):
+            raise AssertionError("existing conversation should be reused")
+
+        async def get_conversation(self, umo, cid):
+            assert umo == session_id
+            assert cid == conversation.cid
+            return conversation
+
+        async def update_conversation(self, umo, cid, history, token_usage=None):
+            assert umo == session_id
+            assert cid == conversation.cid
+            self.updated_history = history
+
+    class _Context:
+        def __init__(self):
+            self.conversation_manager = _ConvManager()
+            self.persona_manager = _NoPersonaManager()
+
+        def get_registered_star(self, name):
+            return None
+
+        def get_config(self, umo=""):
+            return {"provider_settings": {"tool_call_timeout": 1}}
+
+    class _Runner:
+        async def step_until_done(self, max_step):
+            assert max_step == 30
+            if False:
+                yield None
+
+        def get_final_llm_resp(self):
+            return SimpleNamespace(role="assistant", completion_text="我来问问部署结果。")
+
+    async def _fake_build_main_agent(*, event, plugin_context, config, req):
+        assert event.get_extra("provider_request") is req
+        assert "主动消息唤醒" in req.system_prompt
+        assert req.contexts == initial_history
+        return SimpleNamespace(agent_runner=_Runner())
+
+    monkeypatch.setattr(module, "build_main_agent", _fake_build_main_agent)
+
+    plugin = object.__new__(module.PrivateProactiveReplyPlugin)
+    plugin.config = {"excluded_platforms": [], "conversation_history_limit": 24}
+    plugin.context = _Context()
+    plugin._lock = asyncio.Lock()
+    plugin._dirty = False
+    plugin._state = {
+        "schema_version": module.STATE_SCHEMA_VERSION,
+        "sessions": {
+            session_id: {
+                "last_user_message_time": _ts(2026, 6, 16, 9, 0),
+                "last_seen_text": "刚才聊到部署结果",
+            }
+        },
+    }
+
+    asyncio.run(plugin._run_pipeline_agent(session_id, "idle_scan"))
+
+    stored = plugin.context.conversation_manager.updated_history
+    assert stored == [
+        {"role": "user", "content": "刚才聊到部署结果"},
+        {"role": "assistant", "content": "我来问问部署结果。"},
+    ]
+    serialized = json.dumps(stored, ensure_ascii=False)
+    assert "主动消息唤醒" not in serialized
+    assert module.PIPELINE_USER_PROMPT not in serialized
