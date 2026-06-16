@@ -1,6 +1,6 @@
 # 私聊智能主动回复
 
-> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.9.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
+> 📦 [astrbot_plugin_private_proactive_reply](https://github.com/kazamisama/astrbot_plugin_private_proactive_reply) · 🏷️ v0.10.0 · 📜 AGPL-3.0 · 🤖 AstrBot ≥ 4.8.0
 
 一个轻量版私聊主动回复插件。参考 `astrbot_plugin_proactive_chat` 的核心思路，但第一版刻意不引入 WebUI、遥测、TTS、复杂多会话覆盖配置，只保留私聊主动回复所需的稳定闭环。
 
@@ -13,6 +13,7 @@
 - 没有模型排期时，可按 `idle_after_minutes` 固定沉默时间兜底触发。
 - 使用当前会话人格、最近 conversation 历史和平台真实私聊流水，保证语气延续。
 - 支持 `hybrid` 上下文模式：平台真实聊天流水 + LLM conversation history，减少主动消息割裂感。
+- 支持 `reply_mode="pipeline"`：主动消息可走 AstrBot 主 agent，复用普通会话的人格、记忆和工具链；唤醒词只注入本轮 `system_prompt`，不写入 conversation。
 - 支持免打扰时段、最小间隔、连续未回复上限。
 - 状态持久化到插件数据目录 `state.json`，采用脏标记 + 后台批量落盘（`state_flush_interval_seconds`），高频私聊不会每条消息都同步写盘，插件停止时强制落盘。
 - 提供管理员命令查看状态、手动触发、启停会话。
@@ -46,6 +47,20 @@
 平台流水会以事实参考形式注入，不作为新的用户请求，也不能覆盖系统设定或本次最终指令。可通过 `platform_history_count`、`platform_context_max_chars`、`include_bot_messages`、`bot_identifiers` 控制注入范围。
 
 如果配置文件里仍保留旧版默认 `proactive_prompt`，`auto_upgrade_legacy_prompt=true` 时会运行时临时使用新版默认模板，让 `THREAD`、上次主动消息、风格阶段、话题提示等字段真正进入模型。
+
+## Pipeline 生成模式（v0.10.0）
+
+默认 `reply_mode="legacy"`，保持原机制：插件直接调用当前会话 Provider 生成主动消息，再通过 `context.send_message` 发送。
+
+如果希望主动消息更像普通会话，可以改为 `reply_mode="pipeline"`。该模式会构造 AstrBot 内置的合成事件，交给主 agent 生成和发送，因此会复用普通对话的人格、记忆、工具链和 provider 选择逻辑。
+
+关键边界：
+
+- 唤醒词只注入本轮 `system_prompt`，不会作为一条用户消息写入 conversation。
+- 插件只会把最终 assistant 回复追加到 conversation，避免历史里留下“系统唤醒”的伪用户发言。
+- `pipeline_wake_prompt` 可自定义唤醒词，支持 `{user_name}`、`{bot_name}`、`{reason}`、`{reason_guidance}`、`{idle_minutes}`、`{mood_hint}`、`{message_hint}`、`{last_user_message}`。
+- 如果当前 AstrBot 版本缺少 `CronMessageEvent` / `build_main_agent` 等接口，会自动回退到 `legacy`。
+- pipeline 模式由主 agent 负责发送，`enable_segmented_send` 和 `max_reply_chars` 只作用于 legacy 模式。
 
 ## LLM 自主排期
 

@@ -29,6 +29,32 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain
 
+# v0.10.0 (A1 pipeline mode): optional integration with AstrBot's main agent
+# loop. When reply_mode == "pipeline" we synthesize a CronMessageEvent and run
+# build_main_agent so the proactive reply goes through the same persona /
+# memory / tool path a normal turn does. These imports are kept lazy-friendly:
+# if the running AstrBot version does not expose them, _PIPELINE_AGENT_AVAILABLE
+# stays False and the plugin silently falls back to the legacy provider path.
+try:
+    from astrbot.core.cron.events import CronMessageEvent
+    from astrbot.core.platform.message_session import MessageSession
+    from astrbot.core.provider.entities import ProviderRequest
+    from astrbot.core.astr_main_agent import (
+        MainAgentBuildConfig,
+        build_main_agent,
+    )
+
+    _PIPELINE_AGENT_AVAILABLE = True
+    _PIPELINE_AGENT_IMPORT_ERROR = ""
+except Exception as _exc:  # noqa: BLE001
+    CronMessageEvent = None  # type: ignore[assignment]
+    MessageSession = None  # type: ignore[assignment]
+    ProviderRequest = None  # type: ignore[assignment]
+    MainAgentBuildConfig = None  # type: ignore[assignment]
+    build_main_agent = None  # type: ignore[assignment]
+    _PIPELINE_AGENT_AVAILABLE = False
+    _PIPELINE_AGENT_IMPORT_ERROR = str(_exc)
+
 PLUGIN_NAME = "astrbot_plugin_private_proactive_reply"
 # v0.5.0: cross-plugin integration with astrbot_plugin_emotion_state_machine.
 # When that plugin is installed and enabled, we inject its prompt block into
@@ -76,6 +102,22 @@ DEFAULT_BOT_IDENTIFIERS = {"bot", "astrbot", "assistant"}
 # message. A configured persona always takes precedence over it.
 FALLBACK_SYSTEM_PROMPT = (
     "你是一个温和、自然的私聊伙伴。请用简洁口语化的中文，像熟悉的朋友一样主动开口，避免机械问候和过度煊情。"
+)
+
+
+PIPELINE_WAKE_PROMPT_DEFAULT = (
+    "\n\n[主动消息唤醒]\n"
+    "现在没有新的用户消息，是系统按沉默时长唤醒你主动给对方发一条消息。"
+    "触发原因：{reason}{reason_guidance}\n"
+    "对方（{user_name}）已经 {idle_minutes} 分钟没有发消息了，"
+    "你（{bot_name}）想主动找他说点什么。\n"
+    "请像平时聊天一样，结合你们之前的对话，自然地主动开口，"
+    "只输出要发给对方的一条消息内容，不要解释、不要旁白、不要前缀。\n"
+    "语气提示：{mood_hint}；话题提示：{message_hint}。"
+)
+PIPELINE_USER_PROMPT = (
+    "现在轮到你主动发消息。请根据系统提示与上面的历史对话，"
+    "用与之前一致的语气，自然地主动开口，只输出要发送给对方的内容。"
 )
 
 
@@ -167,8 +209,7 @@ class PrivateProactiveReplyPlugin(star.Star):
             value = float(self.config.get(key, default))
         except (TypeError, ValueError):
             logger.warning(
-            f"[private-proactive] config {key} is not a valid "
-            f"number, falling back to default {default}."
+                f"[私聊主动回复] 配置 {key} 不是有效数字，使用默认值 {default}。"
             )
             value = default
         # Reject NaN / +inf / -inf before the clamp pair. A
@@ -184,8 +225,7 @@ class PrivateProactiveReplyPlugin(star.Star):
         # keeps running. Aligns with esm v0.3.1 and social_context v0.8.4.
         if not math.isfinite(value):
             logger.warning(
-            f"[private-proactive] config {key} is non-finite "
-            f"({value!r}), falling back to default {default}."
+                f"[私聊主动回复] 配置 {key} 是非有限数字 {value!r}，使用默认值 {default}。"
             )
             value = default
         if min_value is not None:
@@ -378,6 +418,8 @@ class PrivateProactiveReplyPlugin(star.Star):
         """Record user activity in private chats and reset unanswered count."""
         if not self._cfg_bool("enabled", True):
             return
+        if event.get_extra("proactive_reply_wake"):
+            return
         if not event.get_messages():
             return
 
@@ -415,6 +457,8 @@ class PrivateProactiveReplyPlugin(star.Star):
             session_id = event.unified_msg_origin
         except Exception:
             return
+        if event.get_extra("proactive_reply_wake"):
+            return
         if not session_id or "FriendMessage" not in session_id:
             return
         if not self._cfg_bool("track_normal_bot_messages", True):
@@ -438,6 +482,8 @@ class PrivateProactiveReplyPlugin(star.Star):
         if not self._cfg_bool("llm_schedule_enabled", True):
             return
         if not self._cfg_bool("llm_schedule_prompt_enabled", True):
+            return
+        if event.get_extra("proactive_reply_wake"):
             return
         if not hasattr(request, "system_prompt"):
             return
@@ -693,6 +739,9 @@ class PrivateProactiveReplyPlugin(star.Star):
             return
         self._running_sessions.add(session_id)
         try:
+            if self._pipeline_mode_active():
+                await self._run_pipeline_agent(session_id, reason=reason)
+                return
             result = await self._generate_proactive_text(session_id, reason=reason)
             if not result:
                 await self._clear_schedule(session_id)
@@ -765,6 +814,206 @@ class PrivateProactiveReplyPlugin(star.Star):
         finally:
             self._running_sessions.discard(session_id)
 
+    # ------------------------------------------------------------------
+    # v0.10.0 A1 pipeline mode: run AstrBot's main agent for proactive reply
+    # ------------------------------------------------------------------
+    def _pipeline_mode_active(self) -> bool:
+        """Return True only when pipeline (A1) mode is requested and usable."""
+        mode = str(self.config.get("reply_mode", "legacy") or "legacy").strip().lower()
+        if mode != "pipeline":
+            return False
+        if not _PIPELINE_AGENT_AVAILABLE:
+            logger.warning(
+                "[私聊主动回复] reply_mode=pipeline，但当前 AstrBot 版本缺少所需接口"
+                f"（{_PIPELINE_AGENT_IMPORT_ERROR}），已回退 legacy 直调 Provider 模式。"
+            )
+            return False
+        return True
+
+    def _default_pipeline_wake_prompt(self) -> str:
+        return PIPELINE_WAKE_PROMPT_DEFAULT
+
+    def _build_wake_prompt(self, session_id, reason, state):
+        """Build the proactive wake instruction injected into system_prompt.
+
+        Placed in system_prompt (not as a user turn) so it steers this single
+        reply without ever being written to conversation history.
+        """
+        template = str(self.config.get("pipeline_wake_prompt", "") or "").strip()
+        if not template:
+            template = self._default_pipeline_wake_prompt()
+        user_name = self._compact_text(str(state.get("last_seen_sender") or ""), 40)
+        if not user_name:
+            sender = session_id.split(":")[-1] if ":" in session_id else session_id
+            user_name = self._compact_text(sender, 40) or "对方"
+        bot_name = self._compact_text(str(self.config.get("bot_name", "") or ""), 40) or "你"
+        last_user = float(state.get("last_user_message_time") or 0)
+        now_ts = time.time()
+        idle_minutes = max(0.0, (now_ts - last_user) / 60) if last_user else 0.0
+        variables = {
+            "user_name": user_name,
+            "bot_name": bot_name,
+            "reason": reason or "",
+            "reason_guidance": self._reason_guidance(reason),
+            "idle_minutes": f"{idle_minutes:.0f}",
+            "mood_hint": self._compact_text(str(state.get("next_mood_hint") or ""), 120),
+            "message_hint": self._compact_text(str(state.get("next_message_hint") or ""), 200),
+            "last_user_message": self._compact_text(str(state.get("last_seen_text") or ""), 200),
+        }
+        return self._format_template(template, variables)
+
+    async def _run_pipeline_agent(self, session_id, reason):
+        """A1: drive AstrBot's main agent loop to produce + send the reply."""
+        excluded = {
+            str(pf).strip().lower()
+            for pf in self._cfg_list("excluded_platforms")
+            if str(pf).strip()
+        }
+        platform = session_id.split(":", 1)[0].strip().lower()
+        if platform in excluded:
+            logger.info(
+                f"[私聊主动回复] 平台 {platform} 在排除列表中，跳过 pipeline 主动消息: {session_id}"
+            )
+            await self._mark_skip(session_id, "platform_excluded")
+            return
+
+        try:
+            session = MessageSession.from_str(session_id)
+        except Exception as exc:
+            logger.warning(f"[私聊主动回复] pipeline 无法解析会话 {session_id}: {exc}")
+            await self._mark_skip(session_id, "pipeline_bad_session")
+            return
+
+        conv_mgr = self.context.conversation_manager
+        conv_id = await conv_mgr.get_curr_conversation_id(session_id)
+        if not conv_id:
+            try:
+                conv_id = await conv_mgr.new_conversation(session_id, session.platform_id)
+            except Exception as exc:
+                logger.warning(f"[私聊主动回复] pipeline 创建对话失败 {session_id}: {exc}")
+                await self._mark_skip(session_id, "pipeline_no_conversation")
+                return
+        conversation = await conv_mgr.get_conversation(session_id, conv_id)
+        if not conversation:
+            await self._mark_skip(session_id, "pipeline_no_conversation")
+            return
+
+        async with self._lock:
+            state = dict(self._sessions().get(session_id, {}))
+
+        system_prompt = await self._get_system_prompt(session_id, conversation)
+        wake_prompt = self._build_wake_prompt(session_id, reason, state)
+        full_system_prompt = (system_prompt or "").rstrip() + wake_prompt
+
+        try:
+            cron_event = CronMessageEvent(
+                context=self.context,
+                session=session,
+                message="",
+                sender_name="ProactiveReply",
+                extras={"proactive_reply_wake": True},
+                message_type=session.message_type,
+            )
+        except Exception as exc:
+            logger.error(f"[私聊主动回复] pipeline 构造事件失败 {session_id}: {exc}", exc_info=True)
+            await self._mark_skip(session_id, f"pipeline_event_error:{type(exc).__name__}")
+            return
+
+        req = ProviderRequest()
+        req.conversation = conversation
+        try:
+            history = json.loads(conversation.history) if conversation.history else []
+        except Exception:
+            history = []
+        if isinstance(history, list) and history:
+            history_limit = self._cfg_int("conversation_history_limit", 24, 0)
+            req.contexts = history[-history_limit:] if history_limit > 0 else history
+        req.system_prompt = full_system_prompt
+        req.prompt = PIPELINE_USER_PROMPT
+
+        cron_event.set_extra("provider_request", req)
+
+        cfg = self.context.get_config(umo=session_id)
+        try:
+            tool_call_timeout = int((cfg.get("provider_settings", {}) or {}).get("tool_call_timeout", 120))
+        except Exception:
+            tool_call_timeout = 120
+        build_config = MainAgentBuildConfig(
+            tool_call_timeout=tool_call_timeout,
+            streaming_response=False,
+        )
+
+        result = await build_main_agent(
+            event=cron_event,
+            plugin_context=self.context,
+            config=build_config,
+            req=req,
+        )
+        if not result:
+            logger.warning(f"[私聊主动回复] pipeline 未能构建主 agent: {session_id}")
+            await self._clear_schedule(session_id)
+            await self._mark_skip(session_id, "pipeline_no_agent")
+            return
+
+        runner = result.agent_runner
+        max_step = self._cfg_int("pipeline_max_step", 30, 1)
+        async for _ in runner.step_until_done(max_step):
+            pass
+
+        llm_resp = runner.get_final_llm_resp()
+        reply_text = ""
+        if llm_resp and getattr(llm_resp, "role", "") == "assistant":
+            reply_text = (getattr(llm_resp, "completion_text", "") or "").strip()
+
+        if not reply_text and not getattr(cron_event, "_has_send_oper", False):
+            await self._clear_schedule(session_id)
+            await self._mark_skip(session_id, "pipeline_empty_response")
+            return
+
+        if reply_text:
+            try:
+                stored = json.loads(conversation.history) if conversation.history else []
+                if not isinstance(stored, list):
+                    stored = []
+                stored.append({"role": "assistant", "content": reply_text})
+                await conv_mgr.update_conversation(session_id, conv_id, history=stored)
+            except Exception as exc:
+                logger.warning(f"[私聊主动回复] pipeline 写入历史失败 {session_id}: {exc}")
+
+        async with self._lock:
+            st = self._get_session_state(session_id)
+            now = time.time()
+            is_reminder = st.get("scheduled_by") == "reminder_tool"
+            recurring = bool(st.get("reminder_recurring"))
+            reminder_tod = str(st.get("reminder_time_of_day") or "")
+            st["last_proactive_time"] = now
+            st["last_proactive_reason"] = reason
+            if reply_text:
+                st["last_proactive_text_preview"] = self._compact_text(reply_text, 120)
+            if is_reminder:
+                next_reason = st.get("next_reason")
+                next_mood = st.get("next_mood_hint")
+                next_msg = st.get("next_message_hint")
+                self._drop_schedule_fields(st)
+                if recurring and reminder_tod:
+                    nxt = self._next_time_of_day_ts(reminder_tod, now=now)
+                    if nxt is not None:
+                        st["next_trigger_time"] = nxt
+                        st["next_reason"] = next_reason or "reminder"
+                        st["next_mood_hint"] = next_mood or ""
+                        st["next_message_hint"] = next_msg or ""
+                        st["scheduled_by"] = "reminder_tool"
+                        st["reminder_recurring"] = True
+                        st["reminder_time_of_day"] = reminder_tod
+                st["last_skip_reason"] = "reminder_sent_pipeline"
+            else:
+                st["last_bot_message_time"] = now
+                st["unanswered_count"] = int(st.get("unanswered_count") or 0) + 1
+                self._drop_schedule_fields(st)
+                st.pop("idle_target_minutes", None)
+                st["last_skip_reason"] = "sent_pipeline"
+            self._mark_dirty()
+        logger.info(f"[私聊主动回复] 已通过 pipeline 向 {session_id} 发送主动消息。")
     def _describe_exception(self, exc: Exception) -> str:
         """Best-effort extraction of an HTTP error body from a provider
         exception, returned as a short " | detail: ..." suffix.

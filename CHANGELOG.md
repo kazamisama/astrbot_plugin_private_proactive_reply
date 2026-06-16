@@ -2,6 +2,21 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.10.0] - 2026-06-16
+
+### Added
+
+- 新增主动回复生成模式 `reply_mode`：
+  - `legacy`：保持原机制，插件直接调用 Provider 生成并发送。
+  - `pipeline`：构造 AstrBot 合成事件并运行主 agent，复用普通会话的人格、记忆、工具链和 provider 选择逻辑。
+- 新增 `pipeline_wake_prompt`、`pipeline_max_step`、`bot_name` 配置。
+
+### Changed
+
+- pipeline 模式下，主动唤醒词只注入本轮 `system_prompt`，不会作为用户消息写入 conversation；插件只追加最终 assistant 回复。
+- pipeline 模式缺少 AstrBot 内部接口时自动回退 legacy，避免版本差异导致插件启动失败。
+- 新增 pipeline 流程日志，并统一为 `[私聊主动回复]` 中文前缀。
+
 ## [v0.9.0] - 2026-06-15
 
 ### Added
