@@ -2,6 +2,14 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.10.1] - 2026-06-16
+
+### Changed
+
+- `reply_mode` 默认值改为 `pipeline`，主动回复默认走 AstrBot 主 agent。
+- pipeline 模式改为 persona-first：会话人格 prompt 作为本轮 `system_prompt` 主体，插件只追加极简唤醒说明。
+- 移除公开配置 `pipeline_wake_prompt` 和 `bot_name`，避免主动回复生成策略与会话人格 prompt 抢控制权。
+
 ## [v0.10.0] - 2026-06-16
 
 ### Added

@@ -1133,7 +1133,12 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
 
     session_id = "webchat:FriendMessage:user1"
     initial_history = [{"role": "user", "content": "刚才聊到部署结果"}]
-    conversation = SimpleNamespace(cid="conv1", history=json.dumps(initial_history))
+    conversation = SimpleNamespace(
+        cid="conv1",
+        history=json.dumps(initial_history),
+        persona_id="persona1",
+    )
+    persona_prompt = "你是当前会话绑定的人格。"
 
     class _ConvManager:
         def __init__(self):
@@ -1159,13 +1164,23 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
     class _Context:
         def __init__(self):
             self.conversation_manager = _ConvManager()
-            self.persona_manager = _NoPersonaManager()
+            self.persona_manager = SimpleNamespace(
+                get_persona=self._get_persona,
+                get_default_persona_v3=self._get_default_persona_v3,
+            )
 
         def get_registered_star(self, name):
             return None
 
         def get_config(self, umo=""):
             return {"provider_settings": {"tool_call_timeout": 1}}
+
+        async def _get_persona(self, persona_id):
+            assert persona_id == "persona1"
+            return SimpleNamespace(system_prompt=persona_prompt)
+
+        async def _get_default_persona_v3(self, umo=""):
+            raise AssertionError("bound conversation persona should be used")
 
     class _Runner:
         async def step_until_done(self, max_step):
@@ -1178,6 +1193,7 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
 
     async def _fake_build_main_agent(*, event, plugin_context, config, req):
         assert event.get_extra("provider_request") is req
+        assert req.system_prompt.startswith(persona_prompt)
         assert "主动消息唤醒" in req.system_prompt
         assert req.contexts == initial_history
         return SimpleNamespace(agent_runner=_Runner())

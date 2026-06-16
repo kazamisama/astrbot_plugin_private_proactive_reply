@@ -107,17 +107,13 @@ FALLBACK_SYSTEM_PROMPT = (
 
 PIPELINE_WAKE_PROMPT_DEFAULT = (
     "\n\n[主动消息唤醒]\n"
-    "现在没有新的用户消息，是系统按沉默时长唤醒你主动给对方发一条消息。"
-    "触发原因：{reason}{reason_guidance}\n"
-    "对方（{user_name}）已经 {idle_minutes} 分钟没有发消息了，"
-    "你（{bot_name}）想主动找他说点什么。\n"
-    "请像平时聊天一样，结合你们之前的对话，自然地主动开口，"
-    "只输出要发给对方的一条消息内容，不要解释、不要旁白、不要前缀。\n"
-    "语气提示：{mood_hint}；话题提示：{message_hint}。"
+    "本轮没有新的用户消息。系统因 {reason} 唤醒你主动发一条消息。\n"
+    "请优先遵循上方会话人格设定和既有对话历史，自然发送一条给对方的消息。\n"
+    "不要解释唤醒原因，不要输出旁白或前缀。\n"
+    "沉默时长：约 {idle_minutes} 分钟。语气提示：{mood_hint}。话题提示：{message_hint}。"
 )
 PIPELINE_USER_PROMPT = (
-    "现在轮到你主动发消息。请根据系统提示与上面的历史对话，"
-    "用与之前一致的语气，自然地主动开口，只输出要发送给对方的内容。"
+    "请执行本轮主动消息唤醒。"
 )
 
 
@@ -819,7 +815,7 @@ class PrivateProactiveReplyPlugin(star.Star):
     # ------------------------------------------------------------------
     def _pipeline_mode_active(self) -> bool:
         """Return True only when pipeline (A1) mode is requested and usable."""
-        mode = str(self.config.get("reply_mode", "legacy") or "legacy").strip().lower()
+        mode = str(self.config.get("reply_mode", "pipeline") or "pipeline").strip().lower()
         if mode != "pipeline":
             return False
         if not _PIPELINE_AGENT_AVAILABLE:
@@ -833,26 +829,13 @@ class PrivateProactiveReplyPlugin(star.Star):
     def _default_pipeline_wake_prompt(self) -> str:
         return PIPELINE_WAKE_PROMPT_DEFAULT
 
-    def _build_wake_prompt(self, session_id, reason, state):
-        """Build the proactive wake instruction injected into system_prompt.
-
-        Placed in system_prompt (not as a user turn) so it steers this single
-        reply without ever being written to conversation history.
-        """
-        template = str(self.config.get("pipeline_wake_prompt", "") or "").strip()
-        if not template:
-            template = self._default_pipeline_wake_prompt()
-        user_name = self._compact_text(str(state.get("last_seen_sender") or ""), 40)
-        if not user_name:
-            sender = session_id.split(":")[-1] if ":" in session_id else session_id
-            user_name = self._compact_text(sender, 40) or "对方"
-        bot_name = self._compact_text(str(self.config.get("bot_name", "") or ""), 40) or "你"
+    def _build_wake_prompt(self, _session_id, reason, state):
+        """Build the minimal wake note appended after the persona prompt."""
+        template = self._default_pipeline_wake_prompt()
         last_user = float(state.get("last_user_message_time") or 0)
         now_ts = time.time()
         idle_minutes = max(0.0, (now_ts - last_user) / 60) if last_user else 0.0
         variables = {
-            "user_name": user_name,
-            "bot_name": bot_name,
             "reason": reason or "",
             "reason_guidance": self._reason_guidance(reason),
             "idle_minutes": f"{idle_minutes:.0f}",

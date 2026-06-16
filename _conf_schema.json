@@ -390,29 +390,17 @@
   "reply_mode": {
     "description": "主动回复生成模式",
     "type": "string",
-    "default": "legacy",
+    "default": "pipeline",
     "options": [
-      "legacy",
-      "pipeline"
+      "pipeline",
+      "legacy"
     ],
-    "hint": "legacy：插件直接调 Provider 生成（原机制）。pipeline：A1 模式，构造合成事件走 AstrBot 主 agent（人格/记忆/工具一致），唤醒词仅注入 system_prompt，不写入历史。若当前 AstrBot 版本缺少接口会自动回退 legacy。"
-  },
-  "pipeline_wake_prompt": {
-    "description": "pipeline 模式唤醒词（注入 system_prompt）",
-    "type": "text",
-    "default": "",
-    "hint": "仅 reply_mode=pipeline 生效。可用变量：{user_name} {bot_name} {reason} {reason_guidance} {idle_minutes} {mood_hint} {message_hint} {last_user_message}。留空使用内置默认唤醒词。这段只进 system_prompt，不会被写入对话历史。"
+    "hint": "pipeline：默认模式，构造合成事件走 AstrBot 主 agent，优先使用会话人格、记忆和工具链，只附加极简唤醒说明且不写入历史。legacy：插件直接调 Provider 生成（旧机制）。若当前 AstrBot 版本缺少接口会自动回退 legacy。"
   },
   "pipeline_max_step": {
     "description": "pipeline 模式 agent 最大步数",
     "type": "int",
     "default": 30,
     "hint": "仅 reply_mode=pipeline 生效。agent 工具循环的最大步数。"
-  },
-  "bot_name": {
-    "description": "机器人自称（用于唤醒词 {bot_name}）",
-    "type": "string",
-    "default": "",
-    "hint": "留空则唤醒词里用“你”代替。"
   }
 }
