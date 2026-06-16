@@ -99,10 +99,17 @@ FALLBACK_SYSTEM_PROMPT = (
 
 PIPELINE_WAKE_PROMPT_DEFAULT = (
     "\n\n[主动消息唤醒]\n"
-    "本轮没有新的用户消息。系统因 {reason} 唤醒你主动发一条消息。\n"
+    "本轮没有新的用户消息。系统因 {{reason}} 唤醒你主动发一条消息。\n"
     "请优先遵循上方会话人格设定和既有对话历史，自然发送一条给对方的消息。\n"
     "不要解释唤醒原因，不要输出旁白或前缀。\n"
-    "沉默时长：约 {idle_minutes} 分钟。语气提示：{mood_hint}。话题提示：{message_hint}。"
+    "沉默时长：约 {{idle_minutes}} 分钟。语气提示：{{mood_hint}}。话题提示：{{message_hint}}。"
+)
+PIPELINE_REMINDER_WAKE_PROMPT = (
+    "\n\n[预约提醒唤醒]\n"
+    "本轮没有新的用户消息。系统因用户预约的定点提醒唤醒你主动发一条消息。\n"
+    "请优先遵循上方会话人格设定和既有对话历史，自然完成这次提醒。\n"
+    "不要解释唤醒原因，不要输出旁白或前缀。\n"
+    "提醒内容：{{reason}}。语气提示：{{mood_hint}}。话题提示：{{message_hint}}。"
 )
 class PrivateProactiveReplyPlugin(star.Star):
     """私聊智能主动回复插件。"""
@@ -822,7 +829,11 @@ class PrivateProactiveReplyPlugin(star.Star):
 
     def _build_wake_prompt(self, _session_id, reason, state):
         """Build the minimal wake note appended after the persona prompt."""
-        template = self._default_pipeline_wake_prompt()
+        template = (
+            PIPELINE_REMINDER_WAKE_PROMPT
+            if state.get("scheduled_by") == "reminder_tool"
+            else self._default_pipeline_wake_prompt()
+        )
         last_user = float(state.get("last_user_message_time") or 0)
         now_ts = time.time()
         idle_minutes = max(0.0, (now_ts - last_user) / 60) if last_user else 0.0

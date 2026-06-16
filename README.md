@@ -57,6 +57,7 @@
 关键边界：
 
 - 合成唤醒消息会像普通消息一样进入 pipeline，让生成路径更接近真实会话。
+- idle/LLM 排期使用“主动消息唤醒”文案；用户预约的定点提醒使用“预约提醒唤醒”文案，不再提沉默时长。
 - 发送完成后，插件会从 conversation 中移除这条伪唤醒 user 消息。
 - 插件只会把最终 assistant 回复追加到 conversation，避免历史里留下“系统唤醒”的伪用户发言。
 - 如果当前 AstrBot 版本缺少 `CronMessageEvent` 等接口，会自动回退到 `legacy`。

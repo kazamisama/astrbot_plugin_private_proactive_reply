@@ -1172,6 +1172,37 @@ def test_pipeline_replays_wake_event_to_queue():
     assert "主动消息唤醒" in event.message_str
 
 
+def test_pipeline_wake_prompt_uses_reminder_wording():
+    module = load_module()
+    plugin = make_plugin_stub({})
+    normal = plugin._build_wake_prompt(
+        "webchat:FriendMessage:user1",
+        "llm_scheduled",
+        {
+            "last_user_message_time": _ts(2026, 6, 16, 9, 0),
+            "next_mood_hint": "轻一点",
+            "next_message_hint": "问部署结果",
+        },
+    )
+    reminder = plugin._build_wake_prompt(
+        "webchat:FriendMessage:user1",
+        "提醒开会",
+        {
+            "scheduled_by": "reminder_tool",
+            "last_user_message_time": _ts(2026, 6, 16, 9, 0),
+            "next_mood_hint": "别催促",
+            "next_message_hint": "准备开会",
+        },
+    )
+    assert "主动消息唤醒" in normal
+    assert "沉默时长" in normal
+    assert "预约提醒唤醒" in reminder
+    assert "用户预约的定点提醒" in reminder
+    assert "提醒内容：提醒开会" in reminder
+    assert "沉默时长" not in reminder
+    assert module.PIPELINE_REMINDER_WAKE_PROMPT.startswith("\n\n[预约提醒唤醒]")
+
+
 def test_pipeline_wake_prompt_is_removed_from_conversation():
     import asyncio
 
