@@ -395,12 +395,12 @@
       "pipeline",
       "legacy"
     ],
-    "hint": "pipeline：默认模式，构造合成事件走 AstrBot 主 agent，优先使用会话人格、记忆和工具链，只附加极简唤醒说明且不写入历史。legacy：插件直接调 Provider 生成（旧机制）。若当前 AstrBot 版本缺少接口会自动回退 legacy。"
+    "hint": "pipeline：默认模式，重投递合成唤醒消息走 AstrBot 完整事件 pipeline，优先使用会话人格、记忆和工具链；发送后会清理伪唤醒消息，不写入历史。legacy：插件直接调 Provider 生成（旧机制）。若当前 AstrBot 版本缺少接口会自动回退 legacy。"
   },
-  "pipeline_max_step": {
-    "description": "pipeline 模式 agent 最大步数",
-    "type": "int",
-    "default": 30,
-    "hint": "仅 reply_mode=pipeline 生效。agent 工具循环的最大步数。"
+  "pipeline_pending_timeout_seconds": {
+    "description": "pipeline 唤醒事件超时时间",
+    "type": "float",
+    "default": 300,
+    "hint": "仅 reply_mode=pipeline 生效。重投递伪消息后，如果超过该秒数仍未收到发送完成回调，会释放防重复占位。"
   }
 }

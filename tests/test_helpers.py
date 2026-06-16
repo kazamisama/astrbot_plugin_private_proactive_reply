@@ -1124,7 +1124,7 @@ def test_idle_target_seconds_caches_and_resets():
     assert 8100 <= first <= 13500
 
 
-def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
+def test_pipeline_replays_wake_event_to_queue():
     import asyncio
 
     module = load_module()
@@ -1132,79 +1132,24 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
         return
 
     session_id = "webchat:FriendMessage:user1"
-    initial_history = [{"role": "user", "content": "刚才聊到部署结果"}]
-    conversation = SimpleNamespace(
-        cid="conv1",
-        history=json.dumps(initial_history),
-        persona_id="persona1",
-    )
-    persona_prompt = "你是当前会话绑定的人格。"
-
-    class _ConvManager:
-        def __init__(self):
-            self.updated_history = None
-
-        async def get_curr_conversation_id(self, umo):
-            assert umo == session_id
-            return conversation.cid
-
-        async def new_conversation(self, umo, platform_id=None):
-            raise AssertionError("existing conversation should be reused")
-
-        async def get_conversation(self, umo, cid):
-            assert umo == session_id
-            assert cid == conversation.cid
-            return conversation
-
-        async def update_conversation(self, umo, cid, history, token_usage=None):
-            assert umo == session_id
-            assert cid == conversation.cid
-            self.updated_history = history
+    queued = []
 
     class _Context:
         def __init__(self):
-            self.conversation_manager = _ConvManager()
-            self.persona_manager = SimpleNamespace(
-                get_persona=self._get_persona,
-                get_default_persona_v3=self._get_default_persona_v3,
-            )
+            self.conversation_manager = SimpleNamespace()
 
         def get_registered_star(self, name):
             return None
 
-        def get_config(self, umo=""):
-            return {"provider_settings": {"tool_call_timeout": 1}}
-
-        async def _get_persona(self, persona_id):
-            assert persona_id == "persona1"
-            return SimpleNamespace(system_prompt=persona_prompt)
-
-        async def _get_default_persona_v3(self, umo=""):
-            raise AssertionError("bound conversation persona should be used")
-
-    class _Runner:
-        async def step_until_done(self, max_step):
-            assert max_step == 30
-            if False:
-                yield None
-
-        def get_final_llm_resp(self):
-            return SimpleNamespace(role="assistant", completion_text="我来问问部署结果。")
-
-    async def _fake_build_main_agent(*, event, plugin_context, config, req):
-        assert event.get_extra("provider_request") is req
-        assert req.system_prompt.startswith(persona_prompt)
-        assert "主动消息唤醒" in req.system_prompt
-        assert req.contexts == initial_history
-        return SimpleNamespace(agent_runner=_Runner())
-
-    monkeypatch.setattr(module, "build_main_agent", _fake_build_main_agent)
+        def get_event_queue(self):
+            return SimpleNamespace(put_nowait=queued.append)
 
     plugin = object.__new__(module.PrivateProactiveReplyPlugin)
-    plugin.config = {"excluded_platforms": [], "conversation_history_limit": 24}
+    plugin.config = {"excluded_platforms": [], "pipeline_pending_timeout_seconds": 60}
     plugin.context = _Context()
     plugin._lock = asyncio.Lock()
     plugin._dirty = False
+    plugin._pending_pipeline_sessions = set()
     plugin._state = {
         "schema_version": module.STATE_SCHEMA_VERSION,
         "sessions": {
@@ -1217,6 +1162,58 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
 
     asyncio.run(plugin._run_pipeline_agent(session_id, "idle_scan"))
 
+    assert session_id in plugin._pending_pipeline_sessions
+    assert len(queued) == 1
+    event = queued[0]
+    assert event.unified_msg_origin == session_id
+    assert event.get_extra("proactive_reply_wake") is True
+    assert event.get_extra("proactive_reply_reason") == "idle_scan"
+    assert event.message_str == event.get_extra("proactive_reply_wake_text")
+    assert "主动消息唤醒" in event.message_str
+
+
+def test_pipeline_wake_prompt_is_removed_from_conversation():
+    import asyncio
+
+    module = load_module()
+    session_id = "webchat:FriendMessage:user1"
+    wake_text = module.PIPELINE_WAKE_PROMPT_DEFAULT.format(
+        reason="idle_scan",
+        reason_guidance="",
+        idle_minutes="180",
+        mood_hint="",
+        message_hint="",
+        last_user_message="刚才聊到部署结果",
+    )
+    initial_history = [
+        {"role": "user", "content": "刚才聊到部署结果"},
+        {"role": "user", "content": wake_text},
+        {"role": "assistant", "content": "我来问问部署结果。"},
+    ]
+
+    class _ConvManager:
+        def __init__(self):
+            self.updated_history = None
+
+        async def get_curr_conversation_id(self, umo):
+            assert umo == session_id
+            return "conv1"
+
+        async def get_conversation(self, umo, cid):
+            assert umo == session_id
+            assert cid == "conv1"
+            return SimpleNamespace(cid=cid, history=json.dumps(initial_history))
+
+        async def update_conversation(self, umo, cid, history, token_usage=None):
+            assert umo == session_id
+            assert cid == "conv1"
+            self.updated_history = history
+
+    plugin = object.__new__(module.PrivateProactiveReplyPlugin)
+    plugin.context = SimpleNamespace(conversation_manager=_ConvManager())
+
+    asyncio.run(plugin._remove_pipeline_wake_from_history(session_id, wake_text))
+
     stored = plugin.context.conversation_manager.updated_history
     assert stored == [
         {"role": "user", "content": "刚才聊到部署结果"},
@@ -1224,4 +1221,3 @@ def test_pipeline_wake_prompt_is_not_persisted(monkeypatch):
     ]
     serialized = json.dumps(stored, ensure_ascii=False)
     assert "主动消息唤醒" not in serialized
-    assert module.PIPELINE_USER_PROMPT not in serialized

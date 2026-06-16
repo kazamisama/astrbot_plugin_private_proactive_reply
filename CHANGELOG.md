@@ -2,6 +2,14 @@
 
 astrbot_plugin_private_proactive_reply 的所有版本变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [v0.10.2] - 2026-06-16
+
+### Changed
+
+- pipeline 模式改为 litepoke 式重投递：构造合成唤醒事件并放回 AstrBot 事件队列，走完整入站 pipeline。
+- 发送完成后自动清理 conversation 中的伪唤醒 user 消息，只保留最终 assistant 回复，兼顾拟真性和历史洁净度。
+- `pipeline_max_step` 配置替换为 `pipeline_pending_timeout_seconds`，用于释放重投递后的防重复占位。
+
 ## [v0.10.1] - 2026-06-16
 
 ### Changed
