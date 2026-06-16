@@ -565,6 +565,11 @@ class PrivateProactiveReplyPlugin(star.Star):
         if not state.get("enabled", True):
             return None
 
+        if self._is_platform_excluded(session_id):
+            if state.get("last_skip_reason") != "platform_excluded":
+                await self._mark_skip(session_id, "platform_excluded")
+            return None
+
         # v0.6.6: a reminder scheduled via schedule_proactive_reminder_at is
         # user-requested for a specific clock time and must fire even inside
         # quiet_hours. Detect it before the quiet gate so only idle /
@@ -849,14 +854,9 @@ class PrivateProactiveReplyPlugin(star.Star):
 
     async def _run_pipeline_agent(self, session_id, reason):
         """Replay a synthetic wake event through AstrBot's normal pipeline."""
-        excluded = {
-            str(pf).strip().lower()
-            for pf in self._cfg_list("excluded_platforms")
-            if str(pf).strip()
-        }
-        platform = session_id.split(":", 1)[0].strip().lower()
-        if platform in excluded:
-            logger.info(
+        if self._is_platform_excluded(session_id):
+            platform = session_id.split(":", 1)[0].strip().lower()
+            logger.debug(
                 f"[私聊主动回复] 平台 {platform} 在排除列表中，跳过 pipeline 主动消息: {session_id}"
             )
             await self._mark_skip(session_id, "platform_excluded")
@@ -1654,14 +1654,9 @@ class PrivateProactiveReplyPlugin(star.Star):
         return base_prompt.rstrip() + "\n\n" + block
 
     async def _send_text(self, session_id: str, text: str) -> bool:
-        excluded = {
-            str(p).strip().lower()
-            for p in self._cfg_list("excluded_platforms")
-            if str(p).strip()
-        }
-        platform = session_id.split(":", 1)[0].strip().lower()
-        if platform in excluded:
-            logger.info(
+        if self._is_platform_excluded(session_id):
+            platform = session_id.split(":", 1)[0].strip().lower()
+            logger.debug(
                 f"[私聊主动回复] 平台 {platform} 在排除列表中，跳过主动消息: {session_id}"
             )
             return False
@@ -1693,6 +1688,13 @@ class PrivateProactiveReplyPlugin(star.Star):
         if session_id in self._sessions():
             return True
         return allow_auto_register and self._cfg_bool("auto_register_sessions", True)
+
+    def _is_platform_excluded(self, session_id: str) -> bool:
+        platform = session_id.split(":", 1)[0].strip().lower()
+        if not platform:
+            return False
+        excluded = {item.lower() for item in self._cfg_list("excluded_platforms")}
+        return platform in excluded
 
     def _is_blocked_private_event(self, event: AstrMessageEvent) -> bool:
         if not self._cfg_bool("ignore_non_friend_private", True):

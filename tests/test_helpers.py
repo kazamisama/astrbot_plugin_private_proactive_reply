@@ -1124,6 +1124,44 @@ def test_idle_target_seconds_caches_and_resets():
     assert 8100 <= first <= 13500
 
 
+def test_excluded_platform_is_filtered_before_trigger():
+    import asyncio
+
+    module = load_module()
+    plugin = object.__new__(module.PrivateProactiveReplyPlugin)
+    session_id = "webchat:FriendMessage:user1"
+    plugin.config = {"excluded_platforms": ["WebChat"]}
+    plugin._lock = asyncio.Lock()
+    plugin._dirty = False
+    plugin._running_sessions = set()
+    plugin._pending_pipeline_sessions = set()
+    plugin._state = {
+        "schema_version": module.STATE_SCHEMA_VERSION,
+        "sessions": {
+            session_id: {
+                "enabled": True,
+                "last_user_message_time": _ts(2026, 6, 16, 9, 0),
+                "last_skip_reason": "",
+            }
+        },
+    }
+
+    result = asyncio.run(plugin._get_trigger_reason(session_id, _ts(2026, 6, 16, 15, 0)))
+
+    state = plugin._state["sessions"][session_id]
+    assert result is None
+    assert state["last_skip_reason"] == "platform_excluded"
+    assert plugin._dirty is True
+
+    first_skip_time = state["last_skip_time"]
+    plugin._dirty = False
+    result = asyncio.run(plugin._get_trigger_reason(session_id, _ts(2026, 6, 16, 16, 0)))
+
+    assert result is None
+    assert state["last_skip_time"] == first_skip_time
+    assert plugin._dirty is False
+
+
 def test_pipeline_replays_wake_event_to_queue():
     import asyncio
 
